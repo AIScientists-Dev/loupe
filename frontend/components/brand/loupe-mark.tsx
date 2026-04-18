@@ -2,54 +2,107 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Placeholder mark for Loupe — a jeweler's-loupe silhouette (lens + short handle).
- * Swap with the final asset from brand/ when it lands.
+ * Loupe mark — real asset from the brand pack.
+ * Swaps light/dark via Tailwind variants (never filter-invert, which
+ * would corrupt the emerald primary).
  */
 export function LoupeMark({
-  className,
   size = 24,
-  ...props
-}: React.SVGProps<SVGSVGElement> & { size?: number }) {
+  className,
+}: {
+  size?: number;
+  className?: string;
+}) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={cn("text-primary", className)}
+    <span
+      className={cn("relative inline-block shrink-0", className)}
+      style={{ width: size, height: size }}
       aria-hidden="true"
-      {...props}
     >
-      <circle
-        cx="13"
-        cy="13"
-        r="8.5"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        fill="none"
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/brand/mark/mark.svg"
+        width={size}
+        height={size}
+        alt=""
+        className="block dark:hidden"
       />
-      <circle cx="13" cy="13" r="3.5" fill="currentColor" opacity="0.18" />
-      <line
-        x1="19.4"
-        y1="19.4"
-        x2="26.5"
-        y2="26.5"
-        stroke="currentColor"
-        strokeWidth="2.6"
-        strokeLinecap="round"
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/brand/mark/mark-dark.svg"
+        width={size}
+        height={size}
+        alt=""
+        className="hidden dark:block"
       />
-    </svg>
+    </span>
   );
 }
 
-export function LoupeWordmark({ className }: { className?: string }) {
+/** Animated mark for splash / first load. 6s SMIL loop baked in. */
+export function LoupeMarkAnimated({
+  size = 48,
+  className,
+}: {
+  size?: number;
+  className?: string;
+}) {
   return (
-    <div className={cn("flex items-center gap-2", className)}>
-      <LoupeMark size={22} />
-      <span className="text-[15px] font-semibold tracking-tight text-foreground">
-        Loupe
-      </span>
-    </div>
+    <span
+      className={cn("relative inline-block shrink-0", className)}
+      style={{ width: size, height: size }}
+      aria-hidden="true"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/brand/mark/mark-animated.svg"
+        width={size}
+        height={size}
+        alt="Loupe"
+      />
+    </span>
+  );
+}
+
+/**
+ * Loupe lockup (mark + wordmark) for sidebar / headers.
+ * Use for anywhere with horizontal room for the wordmark.
+ */
+export function LoupeLockup({
+  height = 32,
+  withTagline = false,
+  className,
+}: {
+  height?: number;
+  withTagline?: boolean;
+  className?: string;
+}) {
+  const lightSrc = withTagline
+    ? "/brand/lockup/lockup-horizontal-tagline.svg"
+    : "/brand/lockup/lockup-horizontal.svg";
+  const darkSrc = withTagline
+    ? "/brand/lockup/lockup-horizontal-tagline-dark.svg"
+    : "/brand/lockup/lockup-horizontal-dark.svg";
+  return (
+    <span
+      className={cn("relative inline-block shrink-0", className)}
+      style={{ height }}
+      aria-hidden="true"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={lightSrc}
+        height={height}
+        alt="Loupe"
+        className="block h-full w-auto dark:hidden"
+      />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={darkSrc}
+        height={height}
+        alt="Loupe"
+        className="hidden h-full w-auto dark:block"
+      />
+    </span>
   );
 }

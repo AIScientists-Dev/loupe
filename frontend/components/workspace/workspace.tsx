@@ -53,13 +53,6 @@ export function Workspace({ paper }: { paper: Paper }) {
             });
           }
         }}
-        onReopen={async (id) => {
-          // Re-opening = clear decision. Backend has no explicit endpoint yet;
-          // we re-use decide with a sentinel once backend confirms. For now
-          // we optimistically tell the user.
-          toast.info("Change decision — pick Agree or Dismiss again.");
-          setSelectedId(id);
-        }}
         onGenerateReview={() => setReviewOpen(true)}
       />
 

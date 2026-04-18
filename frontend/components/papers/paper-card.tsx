@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { FileText, ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, FileText } from "lucide-react";
 
 import { StatusBadge } from "./status-badge";
 import type { PaperSummary } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export function PaperCard({ paper }: { paper: PaperSummary }) {
   const subtitle =
@@ -18,32 +19,35 @@ export function PaperCard({ paper }: { paper: PaperSummary }) {
   return (
     <Link
       href={`/papers/${paper.id}`}
-      className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/40 hover:bg-accent/40"
+      className={cn(
+        "group relative flex flex-col gap-4 rounded-xl border border-border bg-card p-5 transition-all",
+        "hover:border-primary/50 hover:shadow-md hover:-translate-y-0.5"
+      )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary">
-          <FileText className="size-4" />
-        </div>
+      {/* Top row: status pill only */}
+      <div className="flex items-center justify-between gap-2">
         <StatusBadge status={paper.status} />
+        <ArrowUpRight className="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
 
-      <div className="min-h-0 flex-1">
-        <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight">
+      {/* Title block */}
+      <div className="flex min-h-[4.5rem] flex-col gap-1.5">
+        <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-foreground">
           {paper.title}
         </h3>
-        <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
-          {paper.filename}
+        <p className="flex items-center gap-1.5 truncate font-mono text-[11px] text-muted-foreground">
+          <FileText className="size-3 shrink-0 text-muted-foreground/60" />
+          <span className="truncate">{paper.filename}</span>
         </p>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{subtitle}</span>
-        <span>
+      {/* Footer row: meta + time */}
+      <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
+        <span className="truncate">{subtitle}</span>
+        <span className="shrink-0 whitespace-nowrap">
           {formatDistanceToNow(new Date(paper.created_at), { addSuffix: true })}
         </span>
       </div>
-
-      <ArrowUpRight className="absolute right-5 top-5 size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </Link>
   );
 }

@@ -3,7 +3,6 @@
 import { Upload, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { LoupeMark } from "@/components/brand/loupe-mark";
 import { PaperGrid } from "@/components/papers/paper-grid";
 import { PaperGridSkeleton } from "@/components/papers/paper-grid-skeleton";
 import { UploadDialog } from "@/components/papers/upload-dialog";
@@ -42,9 +41,12 @@ function EmptyState() {
   return (
     <div className="grid h-full place-items-center">
       <div className="flex max-w-md flex-col items-center text-center">
-        <div className="mb-5 grid size-16 place-items-center rounded-2xl bg-primary/10">
-          <LoupeMark size={34} />
-        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/decor/empty-state-decor.svg"
+          alt=""
+          className="mb-3 h-64 w-auto select-none"
+        />
         <h2 className="text-xl font-semibold tracking-tight">No papers yet</h2>
         <p className="mt-2 text-sm text-muted-foreground">
           Upload a PDF to start. Loupe parses it, extracts theorems and proofs,

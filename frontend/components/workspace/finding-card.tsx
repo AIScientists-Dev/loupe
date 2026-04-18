@@ -26,18 +26,34 @@ export type FindingCardProps = {
   onSelect: () => void;
   onDecide: (verdict: "agree" | "dismiss", note?: string) => Promise<void>;
   onInvestigate: (message: string) => Promise<void>;
-  onReopenDecision: () => Promise<void>;
+  /** Keyed imperative signal: when `v` changes, open the given mode. */
+  commandSignal?: { mode: "agree" | "dismiss" | "investigate"; v: number };
 };
 
 export function FindingCard(props: FindingCardProps) {
   const { finding, active, onSelect } = props;
   const meta = ISSUE_META[finding.issue_type] ?? ISSUE_META.other;
   const sev = SEVERITY_META[finding.severity];
-  const decided = !!finding.decision;
 
   const [mode, setMode] = React.useState<"idle" | "agree" | "dismiss" | "investigate">("idle");
   const [note, setNote] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  // Local "I'm revising my decision" flag so Change doesn't need a backend un-decide.
+  const [editing, setEditing] = React.useState(false);
+  const decided = !!finding.decision && !editing;
+
+  // When the backend decision changes (e.g. fresh fetch), exit editing mode.
+  React.useEffect(() => {
+    setEditing(false);
+  }, [finding.decision]);
+
+  // External command signal (keyboard shortcuts) opens the right action mode.
+  React.useEffect(() => {
+    if (!props.commandSignal) return;
+    if (finding.decision && !editing) setEditing(true);
+    setMode(props.commandSignal.mode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.commandSignal?.v]);
 
   const handleDecide = async (verdict: "agree" | "dismiss") => {
     setBusy(true);
@@ -110,14 +126,7 @@ export function FindingCard(props: FindingCardProps) {
           {decided ? (
             <DecidedFooter
               finding={finding}
-              onReopen={async () => {
-                setBusy(true);
-                try {
-                  await props.onReopenDecision();
-                } finally {
-                  setBusy(false);
-                }
-              }}
+              onReopen={() => setEditing(true)}
               busy={busy}
             />
           ) : (
@@ -258,7 +267,7 @@ function DecidedFooter({
   busy,
 }: {
   finding: Finding;
-  onReopen: () => Promise<void>;
+  onReopen: () => void;
   busy: boolean;
 }) {
   return (

@@ -2,12 +2,19 @@
 
 import * as React from "react";
 import { AnimatePresence } from "framer-motion";
-import { Eye, EyeOff, SortAsc } from "lucide-react";
+import { Eye, EyeOff, Keyboard, SortAsc } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useHotkeys } from "@/lib/hooks/use-hotkeys";
 import { FindingCard } from "./finding-card";
+import { ShortcutsHelpDialog, Kbd } from "./shortcuts-help";
 import type { Finding } from "@/lib/types";
 
 type FilterKey = "open" | "agreed" | "dismissed";
@@ -15,13 +22,14 @@ type SortKey = "severity" | "page" | "confidence";
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
 
+type Command = { id: string; mode: "agree" | "dismiss" | "investigate"; v: number };
+
 export function FindingPanel({
   findings,
   selectedId,
   onSelect,
   onDecide,
   onInvestigate,
-  onReopen,
   onGenerateReview,
 }: {
   findings: Finding[];
@@ -29,12 +37,13 @@ export function FindingPanel({
   onSelect: (id: string) => void;
   onDecide: (id: string, verdict: "agree" | "dismiss", note?: string) => Promise<void>;
   onInvestigate: (id: string, message: string) => Promise<void>;
-  onReopen: (id: string) => Promise<void>;
   onGenerateReview?: () => void;
 }) {
   const [filter, setFilter] = React.useState<FilterKey>("open");
   const [sort, setSort] = React.useState<SortKey>("severity");
   const [showDismissed, setShowDismissed] = React.useState(false);
+  const [helpOpen, setHelpOpen] = React.useState(false);
+  const [command, setCommand] = React.useState<Command | null>(null);
 
   const counts = React.useMemo(() => {
     const c = { open: 0, agreed: 0, dismissed: 0 };
@@ -67,6 +76,80 @@ export function FindingPanel({
   }, [findings, filter, sort, showDismissed]);
 
   const allDecided = counts.open === 0 && findings.length > 0;
+
+  const selectNextBy = React.useCallback(
+    (delta: 1 | -1) => {
+      if (!visible.length) return;
+      const idx = visible.findIndex((f) => f.id === selectedId);
+      const nextIdx =
+        idx === -1
+          ? 0
+          : Math.max(0, Math.min(visible.length - 1, idx + delta));
+      onSelect(visible[nextIdx].id);
+    },
+    [visible, selectedId, onSelect]
+  );
+
+  // Hotkeys
+  useHotkeys([
+    {
+      keys: ["j", "ArrowDown"],
+      handler: (e) => {
+        e.preventDefault();
+        selectNextBy(1);
+      },
+    },
+    {
+      keys: ["k", "ArrowUp"],
+      handler: (e) => {
+        e.preventDefault();
+        selectNextBy(-1);
+      },
+    },
+    {
+      keys: ["a"],
+      handler: async (e) => {
+        if (!selectedId) return;
+        const f = findings.find((x) => x.id === selectedId);
+        if (!f) return;
+        e.preventDefault();
+        await onDecide(selectedId, "agree");
+      },
+    },
+    {
+      keys: ["d"],
+      handler: async (e) => {
+        if (!selectedId) return;
+        const f = findings.find((x) => x.id === selectedId);
+        if (!f) return;
+        e.preventDefault();
+        await onDecide(selectedId, "dismiss");
+      },
+    },
+    {
+      keys: ["i"],
+      handler: (e) => {
+        if (!selectedId) return;
+        e.preventDefault();
+        setCommand({ id: selectedId, mode: "investigate", v: Date.now() });
+      },
+    },
+    {
+      keys: ["r"],
+      handler: (e) => {
+        if (!allDecided) return;
+        e.preventDefault();
+        onGenerateReview?.();
+      },
+    },
+    {
+      keys: ["?"],
+      handler: (e) => {
+        e.preventDefault();
+        setHelpOpen((v) => !v);
+      },
+    },
+  ]);
 
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-background">
@@ -103,7 +186,11 @@ export function FindingPanel({
                 onSelect={() => onSelect(f.id)}
                 onDecide={(v, note) => onDecide(f.id, v, note)}
                 onInvestigate={(msg) => onInvestigate(f.id, msg)}
-                onReopenDecision={() => onReopen(f.id)}
+                commandSignal={
+                  command?.id === f.id
+                    ? { mode: command.mode, v: command.v }
+                    : undefined
+                }
               />
             ))}
           </AnimatePresence>
@@ -137,7 +224,44 @@ export function FindingPanel({
             Generate review
           </Button>
         </div>
+
+        <div className="flex items-center justify-between pt-0.5 text-[10.5px] text-muted-foreground/80">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="inline-flex items-center gap-1">
+              <Kbd>j</Kbd>
+              <Kbd>k</Kbd>
+              <span className="ml-0.5">navigate</span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Kbd>a</Kbd>
+              <span className="ml-0.5">agree</span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Kbd>d</Kbd>
+              <span className="ml-0.5">dismiss</span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Kbd>i</Kbd>
+              <span className="ml-0.5">investigate</span>
+            </span>
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setHelpOpen(true)}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Keyboard shortcuts"
+              >
+                <Keyboard className="size-3" />
+                <Kbd>?</Kbd>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>All shortcuts</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
+
+      <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
 }

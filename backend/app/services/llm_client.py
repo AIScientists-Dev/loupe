@@ -157,14 +157,66 @@ class LLMClient:
         temperature: float = 0.2,
         max_tokens: int = 8192,
     ) -> Any:
-        """Call complete() and parse the response as JSON."""
+        """Call complete() and parse the response as JSON.
+
+        Tolerates: markdown code fences, leading/trailing prose, ``json`` tags.
+        Extracts the first balanced JSON value (object or array) if direct parse fails.
+        """
         raw = await self.complete(model, messages, system, temperature, max_tokens)
-        # Strip markdown code fences if present
         text = raw.strip()
+
+        # Strip markdown code fences.
         if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:]  # drop opening fence
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
-        return json.loads(text)
+            nl = text.find("\n")
+            if nl >= 0:
+                text = text[nl + 1:]
+            if text.rstrip().endswith("```"):
+                text = text.rstrip()[:-3].rstrip()
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        extracted = _extract_json_value(text)
+        if extracted is None:
+            raise ValueError(f"LLM response was not parseable as JSON: {text[:200]!r}")
+        return json.loads(extracted)
+
+
+def _extract_json_value(text: str) -> Optional[str]:
+    """Return the first balanced JSON array or object substring in `text`, or None."""
+    open_chars = {"[": "]", "{": "}"}
+    for i, ch in enumerate(text):
+        if ch in open_chars:
+            end = _match_balanced(text, i, ch, open_chars[ch])
+            if end >= 0:
+                return text[i:end + 1]
+    return None
+
+
+def _match_balanced(text: str, start: int, open_ch: str, close_ch: str) -> int:
+    """Walk text from `start` respecting JSON strings + escapes. Return close index or -1."""
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+            continue
+        if c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
