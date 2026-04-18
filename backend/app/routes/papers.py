@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import Response, StreamingResponse
 
 from app.models import (
+    Finding,
     LocalizeStatus,
     Paper,
     PaperStatusResponse,
@@ -138,3 +139,17 @@ async def stream_events(paper_id: str, orch: Orchestrator = Depends(_orch)):
             "Connection": "keep-alive",
         },
     )
+
+
+# -- localize -----------------------------------------------------------------
+
+@router.post("/{paper_id}/findings/{finding_id}/localize", response_model=Finding)
+async def localize_finding_route(
+    paper_id: str,
+    finding_id: str,
+    orch: Orchestrator = Depends(_orch),
+):
+    result = await orch.localize_one(paper_id, finding_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper or finding not found"})
+    return result

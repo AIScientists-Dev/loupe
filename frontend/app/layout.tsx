@@ -33,7 +33,10 @@ export const metadata: Metadata = {
   applicationName: "Loupe",
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: [{ url: "/favicon.ico", sizes: "any" }],
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+    ],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
     other: [
       { rel: "icon", url: "/android-chrome-192.png", sizes: "192x192" },

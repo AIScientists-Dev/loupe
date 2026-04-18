@@ -151,6 +151,15 @@ class LLMClient:
                     "anthropic server tool used: name=%s input_keys=%s",
                     t.get("name"), list((t.get("input") or {}).keys()),
                 )
+            # When server tools are used, the model interleaves reasoning text
+            # with tool calls. The FINAL text block holds the answer; earlier
+            # text blocks are intermediate reasoning and must not be prepended
+            # (callers like complete_json get confused by prose + JSON mixes).
+            text_blocks = [b for b in content if b.get("type") == "text"]
+            if text_blocks:
+                return text_blocks[-1]["text"]
+            return ""
+        # No tools: concatenate all text blocks (rare to have >1).
         parts = [block["text"] for block in content if block.get("type") == "text"]
         return "".join(parts)
 
@@ -193,10 +202,10 @@ class LLMClient:
         except json.JSONDecodeError:
             pass
 
-        extracted = _extract_json_value(text)
-        if extracted is None:
-            raise ValueError(f"LLM response was not parseable as JSON: {text[:200]!r}")
-        return json.loads(extracted)
+        parsed = _extract_and_parse_json(text)
+        if parsed is None:
+            raise ValueError(f"LLM response was not parseable as JSON: {text[:400]!r}")
+        return parsed
 
 
 def _extract_json_value(text: str) -> Optional[str]:
@@ -207,6 +216,46 @@ def _extract_json_value(text: str) -> Optional[str]:
             end = _match_balanced(text, i, ch, open_chars[ch])
             if end >= 0:
                 return text[i:end + 1]
+    return None
+
+
+def _extract_and_parse_json(text: str) -> Optional[Any]:
+    """Find the best balanced JSON substring in `text` that actually parses.
+
+    Strategy: collect all `[...]` and `{...}` candidate substrings, try arrays
+    first (we almost always prompt for arrays), from longest to shortest. Skip
+    candidates that json.loads can't parse. Return the parsed value or None.
+    """
+    candidates_arr: List[str] = []
+    candidates_obj: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "[":
+            end = _match_balanced(text, i, "[", "]")
+            if end >= 0:
+                candidates_arr.append(text[i:end + 1])
+                i = end + 1
+                continue
+        elif ch == "{":
+            end = _match_balanced(text, i, "{", "}")
+            if end >= 0:
+                candidates_obj.append(text[i:end + 1])
+                i = end + 1
+                continue
+        i += 1
+
+    for cand in sorted(candidates_arr, key=len, reverse=True):
+        try:
+            return json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+    for cand in sorted(candidates_obj, key=len, reverse=True):
+        try:
+            return json.loads(cand)
+        except json.JSONDecodeError:
+            continue
     return None
 
 

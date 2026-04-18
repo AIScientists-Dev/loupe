@@ -15,6 +15,7 @@ from app.services.llm_client import LLMClient
 from app.services.mineru_client import MinerUClient
 from app.services.orchestrator import Orchestrator
 from app.services.storage import FileStore
+from app.services.vision_client import VisionClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +38,8 @@ app.add_middleware(
 _store = FileStore()
 _llm = LLMClient()
 _mineru = MinerUClient()
-_orchestrator = Orchestrator(_store, _llm, _mineru)
+_vision = VisionClient()
+_orchestrator = Orchestrator(_store, _llm, _mineru, _vision)
 
 
 def get_orchestrator() -> Orchestrator:

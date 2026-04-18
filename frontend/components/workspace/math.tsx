@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  * Renders a KaTeX expression. Wrap arbitrary text containing $...$ with
  * <MathInline> inside, or pass raw TeX as the children.
  */
-export function Math({
+export function Formula({
   tex,
   block = false,
   className,
@@ -57,7 +57,7 @@ export function MathText({
         p.kind === "text" ? (
           <React.Fragment key={i}>{p.value}</React.Fragment>
         ) : (
-          <Math key={i} tex={p.value} block={p.kind === "block"} />
+          <Formula key={i} tex={p.value} block={p.kind === "block"} />
         )
       )}
     </span>

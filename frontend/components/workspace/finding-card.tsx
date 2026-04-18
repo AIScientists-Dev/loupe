@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { Math, MathText } from "./math";
+import { Formula, MathText } from "./math";
 import { ISSUE_META, SEVERITY_META } from "./issue-type";
 import { IssueIcon } from "./issue-icon";
 import type { Finding } from "@/lib/types";
