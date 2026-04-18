@@ -1,215 +1,140 @@
-"""Paper endpoints — upload, analysis, findings, investigations, draft reviews."""
+"""Paper endpoints — upload, status, SSE, findings, review."""
 from __future__ import annotations
 
-from typing import List, Optional
+import asyncio
+from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
 from app.models import (
-    DraftReviewRequest,
-    DraftReviewResponse,
-    Exchange,
-    ExchangeDecisionRequest,
-    Finding,
-    FindingDecisionRequest,
-    InvestigateRequest,
-    LLMModel,
-    PaperDetailResponse,
-    PaperSummaryResponse,
-    PipelineState,
-    RerunRequest,
+    LocalizeStatus,
+    Paper,
+    PaperStatusResponse,
+    PaperSummary,
+    PIPELINE_ORDER,
 )
-from app.services.orchestrator import PaperOrchestrator
+from app.services.events import bus, format_sse
+from app.services.orchestrator import Orchestrator
 
 router = APIRouter(prefix="/v1/papers", tags=["papers"])
 
 
-def _orch() -> PaperOrchestrator:
+def _orch() -> Orchestrator:
     from app.main import get_orchestrator
     return get_orchestrator()
 
 
-def _user(x_user_id: str = Header(default="default")) -> str:
-    return x_user_id
-
-
 # -- CRUD ---------------------------------------------------------------------
 
-@router.post("", response_model=PaperSummaryResponse)
+@router.post("", response_model=Paper)
 async def create_paper(
     background: BackgroundTasks,
     file: UploadFile = File(...),
-    model: str = Form(default="claude-opus-4-6"),
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
+    orch: Orchestrator = Depends(_orch),
 ):
-    if file.content_type not in ("application/pdf", "application/octet-stream"):
-        raise HTTPException(400, "Only PDF uploads are supported")
+    if file.content_type not in ("application/pdf", "application/octet-stream", None):
+        raise HTTPException(400, detail={"code": "pdf_unreadable", "message": "Only PDF uploads are supported"})
     raw = await file.read()
     if not raw:
-        raise HTTPException(400, "Uploaded PDF is empty")
+        raise HTTPException(400, detail={"code": "pdf_unreadable", "message": "Uploaded PDF is empty"})
 
-    try:
-        llm_model = LLMModel(model)
-    except ValueError:
-        llm_model = LLMModel.claude_opus
+    paper = orch.create_paper(file.filename or "paper.pdf", raw)
+    background.add_task(orch.run_pipeline_task, paper.paper_id)
+    return paper
 
-    paper = orch.create_paper(user_id, file.filename or "paper.pdf", raw, llm_model)
-    background.add_task(orch.run_analysis, paper.paper_id, user_id)
 
-    findings = paper.findings
-    reviewed = sum(1 for f in findings if f.decision is not None)
-    return PaperSummaryResponse(
-        paper_id=paper.paper_id,
-        filename=paper.filename,
-        title=paper.title,
+@router.get("", response_model=List[PaperSummary])
+def list_papers(orch: Orchestrator = Depends(_orch)):
+    return orch.list_papers()
+
+
+@router.get("/{paper_id}", response_model=Paper)
+def get_paper(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    paper = orch.get_paper(paper_id)
+    if not paper:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return paper
+
+
+@router.delete("/{paper_id}", status_code=204)
+def delete_paper(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    if not orch.delete_paper(paper_id):
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return Response(status_code=204)
+
+
+# -- status -------------------------------------------------------------------
+
+@router.get("/{paper_id}/status", response_model=PaperStatusResponse)
+def get_status(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    paper = orch.get_paper(paper_id)
+    if not paper:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    active = [f for f in paper.findings if not f.soft_deleted]
+    localize_pending = sum(1 for f in active if f.localize_status == LocalizeStatus.pending)
+    return PaperStatusResponse(
         status=paper.status,
-        finding_count=len(findings),
-        reviewed_count=reviewed,
-        created_at=paper.created_at,
+        step=paper.step,
+        step_index=paper.step_index,
+        total_steps=len(PIPELINE_ORDER),
+        error_code=paper.error_code,
+        error_message=paper.error_message,
+        finding_count=len(active),
+        localize_pending=localize_pending,
     )
 
 
-@router.get("", response_model=List[PaperSummaryResponse])
-def list_papers(user_id: str = Depends(_user), orch: PaperOrchestrator = Depends(_orch)):
-    return orch.list_papers(user_id)
-
-
-@router.get("/{paper_id}", response_model=PaperDetailResponse)
-def get_paper(paper_id: str, orch: PaperOrchestrator = Depends(_orch)):
-    detail = orch.get_paper_detail(paper_id)
-    if not detail:
-        raise HTTPException(404, "Paper not found")
-    return detail
-
-
-@router.delete("/{paper_id}")
-def delete_paper(paper_id: str, orch: PaperOrchestrator = Depends(_orch)):
-    if not orch.delete_paper(paper_id):
-        raise HTTPException(404, "Paper not found")
-    return {"ok": True}
-
+# -- PDF binary ---------------------------------------------------------------
 
 @router.get("/{paper_id}/pdf")
-def serve_pdf(paper_id: str, orch: PaperOrchestrator = Depends(_orch)):
+def serve_pdf(paper_id: str, orch: Orchestrator = Depends(_orch)):
     pdf_bytes = orch.store.load_pdf(paper_id)
     if not pdf_bytes:
-        raise HTTPException(404, "PDF not found")
+        raise HTTPException(404, detail={"code": "not_found", "message": "PDF not found"})
     return Response(content=pdf_bytes, media_type="application/pdf")
 
 
-@router.get("/{paper_id}/status", response_model=PipelineState)
-def get_status(paper_id: str, orch: PaperOrchestrator = Depends(_orch)):
+# -- SSE events ---------------------------------------------------------------
+
+@router.get("/{paper_id}/events")
+async def stream_events(paper_id: str, orch: Orchestrator = Depends(_orch)):
     paper = orch.get_paper(paper_id)
     if not paper:
-        raise HTTPException(404, "Paper not found")
-    return paper.pipeline_state
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
 
+    async def event_generator():
+        queue = bus.subscribe(paper_id)
+        try:
+            yield format_sse("hello", {
+                "paper_id": paper_id,
+                "status": paper.status.value,
+                "step": paper.step.value,
+                "step_index": paper.step_index,
+            })
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield b": ping\n\n"
+                    continue
+                yield format_sse(payload["event"], payload["data"])
+                if payload["event"] in ("pipeline.done", "step.failed"):
+                    # Drain any late events for 1s, then close.
+                    try:
+                        late = await asyncio.wait_for(queue.get(), timeout=1.0)
+                        yield format_sse(late["event"], late["data"])
+                    except asyncio.TimeoutError:
+                        break
+        finally:
+            bus.unsubscribe(paper_id, queue)
 
-# -- rerun ---------------------------------------------------------------------
-
-@router.post("/{paper_id}/rerun", response_model=PaperDetailResponse)
-async def rerun_paper(
-    paper_id: str,
-    req: RerunRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.rerun_analysis(paper_id, user_id, req.focus_areas)
-    if not result:
-        raise HTTPException(404, "Paper not found")
-    return result
-
-
-# -- finding verdicts ----------------------------------------------------------
-
-@router.post("/{paper_id}/findings/{finding_id}/decide", response_model=Finding)
-async def decide_finding(
-    paper_id: str,
-    finding_id: str,
-    req: FindingDecisionRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.decide_finding(paper_id, finding_id, req, user_id)
-    if not result:
-        raise HTTPException(404, "Finding not found")
-    return result
-
-
-@router.post("/{paper_id}/findings/{finding_id}/investigate", response_model=Exchange)
-async def investigate_finding(
-    paper_id: str,
-    finding_id: str,
-    req: InvestigateRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.investigate_finding(paper_id, finding_id, req, user_id)
-    if not result:
-        raise HTTPException(404, "Finding not found")
-    return result
-
-
-# -- exchange verdicts ---------------------------------------------------------
-
-@router.post("/{paper_id}/exchanges/{exchange_id}/decide", response_model=Exchange)
-async def decide_exchange(
-    paper_id: str,
-    exchange_id: str,
-    req: ExchangeDecisionRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.decide_exchange(paper_id, exchange_id, req, user_id)
-    if not result:
-        raise HTTPException(404, "Exchange not found")
-    return result
-
-
-@router.post("/{paper_id}/exchanges/{exchange_id}/investigate", response_model=Exchange)
-async def investigate_exchange(
-    paper_id: str,
-    exchange_id: str,
-    req: InvestigateRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.investigate_exchange(paper_id, exchange_id, req, user_id)
-    if not result:
-        raise HTTPException(404, "Exchange not found")
-    return result
-
-
-# -- draft review --------------------------------------------------------------
-
-@router.post("/{paper_id}/draft-review", response_model=DraftReviewResponse)
-async def generate_draft_review(
-    paper_id: str,
-    req: DraftReviewRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.generate_draft_review(paper_id, req, user_id)
-    if not result:
-        raise HTTPException(404, "Paper not found")
-    return result
-
-
-@router.post("/{paper_id}/draft-review/pdf")
-async def download_draft_review_pdf(
-    paper_id: str,
-    req: DraftReviewRequest,
-    user_id: str = Depends(_user),
-    orch: PaperOrchestrator = Depends(_orch),
-):
-    result = await orch.generate_draft_review(paper_id, req, user_id)
-    if not result:
-        raise HTTPException(404, "Paper not found")
-    pdf_bytes = orch.render_review_pdf(result.review_markdown)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=review.pdf"},
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )

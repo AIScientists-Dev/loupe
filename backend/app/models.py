@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
@@ -6,62 +8,80 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
-def utc_now_iso() -> str:
+def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _uuid() -> str:
+    return str(uuid4())
+
+
 # ---------------------------------------------------------------------------
-# Enums
+# Enums — locked by backend/frontend contract
 # ---------------------------------------------------------------------------
 
 class PaperStatus(str, Enum):
-    uploading = "uploading"
-    parsing = "parsing"
     analyzing = "analyzing"
     ready = "ready"
-    error = "error"
+    failed = "failed"
+
+
+class PipelineStep(str, Enum):
+    parse = "parse"
+    extract_proofs = "extract_proofs"
+    verify_proofs = "verify_proofs"
+    ready = "ready"
+    failed = "failed"
+
+
+PIPELINE_ORDER: List[PipelineStep] = [
+    PipelineStep.parse,
+    PipelineStep.extract_proofs,
+    PipelineStep.verify_proofs,
+]
+
+
+class ProofKind(str, Enum):
+    theorem = "theorem"
+    lemma = "lemma"
+    proposition = "proposition"
+    corollary = "corollary"
+    claim = "claim"
+    proof = "proof"
+
+
+class IssueType(str, Enum):
+    arithmetic = "arithmetic"
+    logic = "logic"
+    unstated_assumption = "unstated_assumption"
+    wrong_constant = "wrong_constant"
+    quantifier_scope = "quantifier_scope"
+    citation_required = "citation_required"
+    definition_mismatch = "definition_mismatch"
+    missing_step = "missing_step"
+    other = "other"
+
+
+class Severity(str, Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
 
 
 class FindingDecision(str, Enum):
     agree = "agree"
     dismiss = "dismiss"
-    investigate = "investigate"
 
 
-class PipelineStep(str, Enum):
-    parse = "parse"
-    survey = "survey"
-    examine = "examine"
-    compare = "compare"
-    verdict = "verdict"
+class LocalizeStatus(str, Enum):
+    pending = "pending"
+    done = "done"
+    dropped = "dropped"
 
 
-class VenueType(str, Enum):
-    iclr = "iclr"
-    neurips = "neurips"
-    jasa = "jasa"
-    nsf_proposal = "nsf_proposal"
-    technical_report = "technical_report"
-    other = "other"
-
-
-class ReviewStyle(str, Enum):
-    concise = "concise"
-    normal = "normal"
-
-
-class ReviewTone(str, Enum):
-    casual = "casual"
-    formal = "formal"
-
-
-class LLMModel(str, Enum):
-    claude_sonnet = "claude-sonnet-4-6"
-    claude_opus = "claude-opus-4-6"
-    gpt_4_1 = "gpt-4.1"
-    deepseek_v3 = "deepseek-v3"
-    kimi_k2_5 = "kimi-k2.5"
-    minimax_m2_7 = "minimax-m2.7"
+class ExchangeRole(str, Enum):
+    user = "user"
+    assistant = "assistant"
 
 
 # ---------------------------------------------------------------------------
@@ -76,153 +96,156 @@ class BoundingBox(BaseModel):
     height: float = Field(gt=0)
 
 
-class ParsedBlock(BaseModel):
-    block_id: str = Field(default_factory=lambda: str(uuid4()))
-    block_type: str  # text, equation, figure_caption, table, heading
-    content: str
-    page: int
-    bbox: BoundingBox
+class PageMapEntry(BaseModel):
+    """One row in the markdown → PDF page index.
+
+    Maps a slice of the rendered markdown (char_start:char_end) to the PDF page
+    and, when MinerU supplies it, to the block's bounding box on that page.
+    """
+    page: int = Field(ge=1)
+    block_type: str  # text | heading | equation | table | figure_caption
+    char_start: int = Field(ge=0)
+    char_end: int = Field(ge=0)
+    bbox: Optional[BoundingBox] = None
+    section: Optional[str] = None
 
 
-class Finding(BaseModel):
-    finding_id: str = Field(default_factory=lambda: str(uuid4()))
-    label: str
-    reasoning: str
-    bbox: BoundingBox
-    source_block_ids: List[str] = Field(default_factory=list)
-    pipeline_step: PipelineStep = PipelineStep.examine
-    decision: Optional[FindingDecision] = None
-    decision_comment: Optional[str] = None
-    soft_deleted: bool = False
-    created_at: str = Field(default_factory=utc_now_iso)
+class ProofBlock(BaseModel):
+    proof_block_id: str = Field(default_factory=_uuid)
+    kind: ProofKind
+    label: Optional[str] = None   # "Lemma 1", "Theorem 3.2", etc.
+    statement: str
+    body: str = ""                # the proof text, if any (empty for pure statements)
+    page_hint: int = Field(ge=1)
+    section: Optional[str] = None
+    char_start: int = Field(ge=0)
+    char_end: int = Field(ge=0)
+    bbox: Optional[BoundingBox] = None  # coarse, from MinerU
 
 
 class Exchange(BaseModel):
-    exchange_id: str = Field(default_factory=lambda: str(uuid4()))
-    finding_id: str
-    user_direction: str
-    ai_response: str
+    exchange_id: str = Field(default_factory=_uuid)
+    role: ExchangeRole
+    content: str
+    created_at: str = Field(default_factory=_utc_now)
+
+
+class Finding(BaseModel):
+    finding_id: str = Field(default_factory=_uuid)
+    proof_block_id: str
+    issue_type: IssueType
+    severity: Severity
+    confidence: float = Field(ge=0.0, le=1.0)
+    description: str              # 1-3 sentence AI reasoning
+    evidence_quote: str           # exact quoted passage from the markdown
+    page: int = Field(ge=1)
+    bbox: Optional[BoundingBox] = None
+    localize_status: LocalizeStatus = LocalizeStatus.pending
+    visually_verified: bool = False
     decision: Optional[FindingDecision] = None
-    decision_comment: Optional[str] = None
-    created_at: str = Field(default_factory=utc_now_iso)
+    decision_note: Optional[str] = None
+    exchanges: List[Exchange] = Field(default_factory=list)
+    soft_deleted: bool = False
+    created_at: str = Field(default_factory=_utc_now)
 
 
-class PipelineState(BaseModel):
-    current_step: Optional[PipelineStep] = None
-    completed_steps: List[PipelineStep] = Field(default_factory=list)
-    error: Optional[str] = None
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
+class ReviewDraft(BaseModel):
+    draft_id: str = Field(default_factory=_uuid)
+    markdown: str
+    created_at: str = Field(default_factory=_utc_now)
+    updated_at: str = Field(default_factory=_utc_now)
 
 
 class Paper(BaseModel):
-    paper_id: str = Field(default_factory=lambda: str(uuid4()))
-    user_id: str = ""
-    filename: str = ""
+    paper_id: str = Field(default_factory=_uuid)
+    filename: str
     title: Optional[str] = None
-    status: PaperStatus = PaperStatus.uploading
-    model: LLMModel = LLMModel.claude_opus
-    pipeline_state: PipelineState = Field(default_factory=PipelineState)
-    parsed_blocks: List[ParsedBlock] = Field(default_factory=list)
-    survey_summary: Optional[str] = None
+
+    status: PaperStatus = PaperStatus.analyzing
+    step: PipelineStep = PipelineStep.parse
+    step_index: int = 0
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+    markdown: str = ""
+    page_map: List[PageMapEntry] = Field(default_factory=list)
+    proof_blocks: List[ProofBlock] = Field(default_factory=list)
     findings: List[Finding] = Field(default_factory=list)
-    exchanges: List[Exchange] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now_iso)
-    updated_at: str = Field(default_factory=utc_now_iso)
+    review_drafts: List[ReviewDraft] = Field(default_factory=list)
+
+    created_at: str = Field(default_factory=_utc_now)
+    updated_at: str = Field(default_factory=_utc_now)
+
+    # -- helpers -----------------------------------------------------------
+    def finding(self, finding_id: str) -> Optional[Finding]:
+        for f in self.findings:
+            if f.finding_id == finding_id:
+                return f
+        return None
+
+    def draft(self, draft_id: str) -> Optional[ReviewDraft]:
+        for d in self.review_drafts:
+            if d.draft_id == draft_id:
+                return d
+        return None
 
 
 # ---------------------------------------------------------------------------
-# User profile
+# API request / response shapes
 # ---------------------------------------------------------------------------
 
-class LearnedRule(BaseModel):
-    rule_id: str = Field(default_factory=lambda: str(uuid4()))
-    rule_text: str
-    source_finding_id: Optional[str] = None
-    source_decision: Optional[FindingDecision] = None
-    created_at: str = Field(default_factory=utc_now_iso)
-
-
-class UserProfile(BaseModel):
-    user_id: str = Field(default_factory=lambda: str(uuid4()))
-    display_name: str = ""
-    focus_areas: List[str] = Field(default_factory=list)
-    learned_rules: List[LearnedRule] = Field(default_factory=list)
-    onboarding_completed: bool = False
-    custom_style_prompts: Dict[str, str] = Field(default_factory=dict)
-    custom_tone_prompts: Dict[str, str] = Field(default_factory=dict)
-    custom_review_templates: Dict[str, dict] = Field(default_factory=dict)
-    created_at: str = Field(default_factory=utc_now_iso)
-
-
-# ---------------------------------------------------------------------------
-# API request / response models
-# ---------------------------------------------------------------------------
-
-class PaperSummaryResponse(BaseModel):
+class PaperSummary(BaseModel):
     paper_id: str
     filename: str
     title: Optional[str] = None
     status: PaperStatus
+    step: PipelineStep
+    step_index: int
+    finding_count: int
+    decided_count: int
+    created_at: str
+
+
+class PaperStatusResponse(BaseModel):
+    status: PaperStatus
+    step: PipelineStep
+    step_index: int
+    total_steps: int = len(PIPELINE_ORDER)
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
     finding_count: int = 0
-    reviewed_count: int = 0
-    created_at: str
+    localize_pending: int = 0
 
 
-class PaperDetailResponse(BaseModel):
-    paper_id: str
-    user_id: str
-    filename: str
-    title: Optional[str] = None
-    status: PaperStatus
-    model: LLMModel
-    pipeline_state: PipelineState
-    findings: List[Finding]
-    exchanges: List[Exchange]
-    survey_summary: Optional[str] = None
-    created_at: str
-    updated_at: str
-
-
-class FindingDecisionRequest(BaseModel):
+class DecideRequest(BaseModel):
     decision: FindingDecision
-    comment: Optional[str] = None
+    note: Optional[str] = None
 
 
 class InvestigateRequest(BaseModel):
-    direction: str
+    message: str
 
 
-class ExchangeDecisionRequest(BaseModel):
-    decision: FindingDecision
-    comment: Optional[str] = None
+class ReviewGenerateRequest(BaseModel):
+    # placeholder knobs — kept minimal for prototype
+    venue: Optional[str] = None
+    tone: Optional[str] = None
+    length: Optional[str] = None
 
 
-class RerunRequest(BaseModel):
-    focus_areas: Optional[List[str]] = None
+class ReviewPatchRequest(BaseModel):
+    markdown: str
 
 
-class DraftReviewRequest(BaseModel):
-    venue: VenueType
-    style: ReviewStyle = ReviewStyle.normal
-    tone: ReviewTone = ReviewTone.formal
-    custom_style_prompt: Optional[str] = None
-    custom_tone_prompt: Optional[str] = None
-    template_override: Optional[dict] = None
+# ---------------------------------------------------------------------------
+# Error envelope
+# ---------------------------------------------------------------------------
+
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+    detail: Optional[Dict] = None
 
 
-class DraftReviewResponse(BaseModel):
-    review_markdown: str
-    review_sections: Dict[str, str] = Field(default_factory=dict)
-    venue: VenueType
-
-
-class OnboardingRequest(BaseModel):
-    display_name: str
-    research_domain: str = ""
-    focus_areas: List[str] = Field(default_factory=list)
-
-
-class UpdateProfileRequest(BaseModel):
-    display_name: Optional[str] = None
-    focus_areas: Optional[List[str]] = None
+class ErrorEnvelope(BaseModel):
+    error: ErrorBody

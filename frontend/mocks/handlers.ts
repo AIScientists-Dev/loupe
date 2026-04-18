@@ -33,6 +33,8 @@ function scriptPipeline(id: string) {
       (p as unknown as { _step: PipelineStep })._step = step;
       (p as unknown as { _stepIndex: number })._stepIndex = stepIndex;
       // When ready, inject the 5-planted-bug findings as if the pipeline produced them.
+      // Start findings as localize=pending (shimmer), then flip to done over ~3s
+      // to show the "pinning → pinned" visual beat.
       if (status === "ready" && p.findings.length === 0) {
         const source = papers.get("pap_planted5");
         if (source) {
@@ -40,7 +42,16 @@ function scriptPipeline(id: string) {
             ...f,
             id: `${id}_${f.id}`,
             paper_id: id,
+            localize_status: "pending",
           }));
+          p.findings.forEach((f, i) => {
+            setTimeout(
+              () => {
+                f.localize_status = "done";
+              },
+              800 + i * 500
+            );
+          });
         }
       }
     }, delay);

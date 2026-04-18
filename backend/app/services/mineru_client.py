@@ -1,264 +1,202 @@
-"""MinerU PDF parser client — calls AWS GPU endpoint or returns mock data."""
+"""MinerU PDF parser client.
+
+Calls MinerU's /file_parse once per paper. Builds:
+  - markdown (reconstructed from content_list, not MinerU's md_content,
+    so char offsets line up with page_map entries exactly).
+  - page_map: list[PageMapEntry] with page, bbox, char_start, char_end, section.
+
+Local fallback: if MINERU_API_URL is unset, PyMuPDF reads the PDF locally
+(text-only blocks, no formula parsing).
+"""
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
 from app.config import settings
-from app.models import BoundingBox, ParsedBlock
+from app.models import BoundingBox, PageMapEntry
 
 logger = logging.getLogger(__name__)
 
 
 class MinerUClient:
-    """Calls MinerU on AWS GPU for structured PDF parsing."""
+    async def parse_pdf(self, pdf_bytes: bytes, filename: str) -> Tuple[str, List[PageMapEntry]]:
+        if settings.mineru_api_url:
+            return await self._parse_remote(pdf_bytes, filename)
+        logger.warning("MINERU_API_URL not set — using local PyMuPDF fallback (no formula parsing)")
+        return self._parse_local(pdf_bytes)
 
-    async def parse_pdf(self, pdf_bytes: bytes, filename: str) -> List[ParsedBlock]:
-        if not settings.mineru_api_url:
-            logger.info("No MINERU_API_URL configured — using mock parser")
-            return self._mock_parse(pdf_bytes)
+    # -- remote: MinerU /file_parse -------------------------------------------
 
-        # MinerU API: POST /file_parse with files=[pdf], return_content_list=true
+    async def _parse_remote(self, pdf_bytes: bytes, filename: str) -> Tuple[str, List[PageMapEntry]]:
         files = [("files", (filename, pdf_bytes, "application/pdf"))]
         data = {
             "backend": "pipeline",
             "return_content_list": "true",
-            "return_middle_json": "true",
-            "return_md": "true",
+            "return_md": "false",       # we rebuild it from content_list
             "parse_method": "auto",
             "formula_enable": "true",
             "table_enable": "true",
             "lang_list": "en",
         }
-
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            resp = await client.post(
-                settings.mineru_api_url, files=files, data=data
-            )
+        async with httpx.AsyncClient(timeout=settings.mineru_timeout_seconds) as client:
+            resp = await client.post(settings.mineru_api_url, files=files, data=data)
             resp.raise_for_status()
             result = resp.json()
 
-        return self._parse_mineru_response(result)
-
-    def _parse_mineru_response(self, result: Any) -> List[ParsedBlock]:
-        """Parse MinerU response into our ParsedBlock format.
-
-        MinerU response shape:
-        {
-            "results": {
-                "<filename>": {
-                    "md_content": "...",
-                    "content_list": "<JSON string>"  # flat list of dicts
-                }
-            }
-        }
-
-        Each content_list item:
-        {"type": "text", "text": "...", "bbox": [x0, y0, x1, y1], "page_idx": 0}
-        """
-        blocks: List[ParsedBlock] = []
-
-        # Extract content_list from nested results
         content_items = self._extract_content_list(result)
-        md_content = self._extract_markdown(result)
+        if not content_items:
+            raise RuntimeError("MinerU returned no content_list — PDF unreadable")
 
-        if content_items:
-            for item in content_items:
-                block = self._content_item_to_block(item, 1)
-                if block:
-                    blocks.append(block)
+        return _build_markdown_and_pagemap(content_items)
 
-        # Fallback: parse markdown into blocks
-        if not blocks and md_content:
-            blocks = self._markdown_to_blocks(md_content)
-
-        if not blocks:
-            logger.warning("MinerU returned no parseable content, using mock")
-            return self._mock_parse(b"")
-
-        logger.info("MinerU parsed %d blocks from PDF", len(blocks))
-        return blocks
-
-    def _extract_content_list(self, result: Any) -> List[Dict]:
-        """Extract and parse content_list from MinerU response."""
+    @staticmethod
+    def _extract_content_list(result: Any) -> List[Dict]:
         if not isinstance(result, dict):
             return []
-
-        # results is a dict keyed by filename
         results = result.get("results", {})
         if isinstance(results, dict):
             for file_result in results.values():
                 if isinstance(file_result, dict):
                     cl = file_result.get("content_list")
-                    if cl:
-                        # content_list may be a JSON string or already a list
-                        if isinstance(cl, str):
-                            try:
-                                cl = json.loads(cl)
-                            except json.JSONDecodeError:
-                                continue
-                        if isinstance(cl, list):
-                            return cl
-
-        # Direct content_list at top level
+                    if isinstance(cl, str):
+                        try:
+                            cl = json.loads(cl)
+                        except json.JSONDecodeError:
+                            continue
+                    if isinstance(cl, list):
+                        return cl
         cl = result.get("content_list")
-        if cl:
-            if isinstance(cl, str):
-                try:
-                    cl = json.loads(cl)
-                except json.JSONDecodeError:
-                    return []
-            if isinstance(cl, list):
-                return cl
+        if isinstance(cl, str):
+            try:
+                cl = json.loads(cl)
+            except json.JSONDecodeError:
+                return []
+        return cl if isinstance(cl, list) else []
 
-        return []
-
-    def _extract_markdown(self, result: Any) -> str:
-        """Extract markdown content from response."""
-        if not isinstance(result, dict):
-            return ""
-        results = result.get("results", {})
-        if isinstance(results, dict):
-            for file_result in results.values():
-                if isinstance(file_result, dict):
-                    md = file_result.get("md_content", "")
-                    if md:
-                        return md
-        return result.get("md_content", "")
+    # -- local fallback: PyMuPDF ---------------------------------------------
 
     @staticmethod
-    def _content_item_to_block(item: Any, fallback_page: int) -> Optional[ParsedBlock]:
-        """Convert a MinerU content_list item into a ParsedBlock.
+    def _parse_local(pdf_bytes: bytes) -> Tuple[str, List[PageMapEntry]]:
+        try:
+            import fitz  # PyMuPDF
+        except ImportError as e:
+            raise RuntimeError("PyMuPDF (fitz) required for local PDF fallback") from e
 
-        MinerU item format:
-        {"type": "text", "text": "...", "text_level": 1, "bbox": [x0, y0, x1, y1], "page_idx": 0}
-        """
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        items: List[Dict] = []
+        for page_idx in range(doc.page_count):
+            page = doc.load_page(page_idx)
+            blocks = page.get_text("blocks")  # [(x0, y0, x1, y1, text, block_no, block_type), ...]
+            blocks.sort(key=lambda b: (b[1], b[0]))  # top-to-bottom, left-to-right
+            for b in blocks:
+                x0, y0, x1, y1 = b[0], b[1], b[2], b[3]
+                text = (b[4] or "").strip()
+                if not text:
+                    continue
+                item_type = "title" if len(text) < 120 and text.count("\n") == 0 and text.isupper() else "text"
+                items.append({
+                    "type": item_type,
+                    "text": text,
+                    "bbox": [x0, y0, x1, y1],
+                    "page_idx": page_idx,
+                })
+        doc.close()
+        return _build_markdown_and_pagemap(items)
+
+
+# ---------------------------------------------------------------------------
+# Markdown + page_map construction
+# ---------------------------------------------------------------------------
+
+def _build_markdown_and_pagemap(content_items: List[Dict]) -> Tuple[str, List[PageMapEntry]]:
+    """Render content_list items to markdown, tracking char offsets per block.
+
+    Block type mapping:
+      title/text_level>=1 → heading   (rendered as "# ..." / "## ...")
+      text                → text
+      equation            → equation  (display math, "$$...$$")
+      inline_equation     → text (inlined into surrounding text)
+      table               → table
+      image, figure, image_caption, figure_caption → figure_caption
+      discarded           → skipped
+    """
+    md_parts: List[str] = []
+    page_map: List[PageMapEntry] = []
+    current_section: Optional[str] = None
+    cursor = 0
+
+    for item in content_items:
         if not isinstance(item, dict):
-            return None
+            continue
 
-        # Skip discarded blocks
-        item_type = item.get("type", "text")
-        if item_type == "discarded":
-            return None
+        raw_type = item.get("type", "text")
+        if raw_type == "discarded":
+            continue
 
-        content = item.get("text", item.get("content", ""))
-        if not content or not content.strip():
-            return None
+        text = (item.get("text") or item.get("content") or "").strip()
+        if not text:
+            continue
 
-        # Map MinerU types to our types
-        type_map = {
-            "text": "text",
-            "title": "heading",
-            "equation": "equation",
-            "inline_equation": "equation",
-            "table": "table",
-            "image": "figure_caption",
-            "figure": "figure_caption",
-            "image_caption": "figure_caption",
-            "table_caption": "table",
-        }
-        block_type = type_map.get(item_type, "text")
-
-        # text_level 1 = heading
-        if item.get("text_level") == 1:
+        text_level = item.get("text_level")
+        if raw_type == "title" or (isinstance(text_level, int) and text_level >= 1):
+            rendered = _render_heading(text, text_level)
             block_type = "heading"
-
-        # page_idx is 0-based
-        page_num = item.get("page_idx", fallback_page - 1) + 1
-
-        # bbox is [x0, y0, x1, y1]
-        bbox_raw = item.get("bbox", [])
-        if isinstance(bbox_raw, list) and len(bbox_raw) >= 4:
-            x0, y0, x1, y1 = float(bbox_raw[0]), float(bbox_raw[1]), float(bbox_raw[2]), float(bbox_raw[3])
-            bbox = BoundingBox(
-                page=page_num,
-                x=x0,
-                y=y0,
-                width=max(x1 - x0, 1),
-                height=max(y1 - y0, 1),
-            )
+            current_section = text
+        elif raw_type == "equation":
+            rendered = f"$$\n{text}\n$$\n\n"
+            block_type = "equation"
+        elif raw_type == "inline_equation":
+            rendered = f"${text}$\n\n"
+            block_type = "equation"
+        elif raw_type == "table":
+            rendered = f"{text}\n\n"
+            block_type = "table"
+        elif raw_type in {"image", "figure", "image_caption", "figure_caption", "table_caption"}:
+            rendered = f"_{text}_\n\n"
+            block_type = "figure_caption"
         else:
-            bbox = BoundingBox(page=page_num, x=72, y=72, width=468, height=20)
+            rendered = f"{text}\n\n"
+            block_type = "text"
 
-        return ParsedBlock(
+        char_start = cursor
+        md_parts.append(rendered)
+        cursor += len(rendered)
+        char_end = cursor
+
+        bbox = _parse_bbox(item)
+        page = int(item.get("page_idx", 0)) + 1
+
+        page_map.append(PageMapEntry(
+            page=page,
             block_type=block_type,
-            content=content.strip(),
-            page=page_num,
+            char_start=char_start,
+            char_end=char_end,
             bbox=bbox,
-        )
+            section=current_section,
+        ))
 
-    @staticmethod
-    def _markdown_to_blocks(md: str) -> List[ParsedBlock]:
-        """Fallback: split markdown into rough blocks by paragraph."""
-        blocks: List[ParsedBlock] = []
-        paragraphs = [p.strip() for p in md.split("\n\n") if p.strip()]
-        y_offset = 72
-        for para in paragraphs:
-            block_type = "heading" if para.startswith("#") else "text"
-            content = para.lstrip("#").strip()
-            blocks.append(ParsedBlock(
-                block_type=block_type,
-                content=content,
-                page=1,
-                bbox=BoundingBox(page=1, x=72, y=y_offset, width=468, height=20),
-            ))
-            y_offset += 30
-        return blocks
+    return "".join(md_parts), page_map
 
-    @staticmethod
-    def _mock_parse(pdf_bytes: bytes) -> List[ParsedBlock]:
-        """Local fallback with realistic mock blocks for testing."""
-        return [
-            ParsedBlock(
-                block_type="heading",
-                content="On the Convergence Properties of Gradient Descent in Non-Convex Settings",
-                page=1,
-                bbox=BoundingBox(page=1, x=72, y=72, width=468, height=24),
-            ),
-            ParsedBlock(
-                block_type="text",
-                content="Abstract: We study the convergence behavior of gradient descent methods applied to non-convex optimization problems. Our main contribution is a novel proof showing that under mild regularity conditions, gradient descent achieves a convergence rate of O(1/sqrt(T)) to first-order stationary points.",
-                page=1,
-                bbox=BoundingBox(page=1, x=72, y=120, width=468, height=60),
-            ),
-            ParsedBlock(
-                block_type="text",
-                content="Theorem 3.2: Let f be L-smooth and bounded below. Then gradient descent with step size eta = 1/L satisfies min_{t=0..T} ||grad f(x_t)|| <= sqrt(2L(f(x_0) - f*)/T).",
-                page=3,
-                bbox=BoundingBox(page=3, x=72, y=200, width=468, height=40),
-            ),
-            ParsedBlock(
-                block_type="text",
-                content="Proof of Theorem 3.2: By L-smoothness we have f(x_{t+1}) <= f(x_t) - (1/2L)||grad f(x_t)||^2. Summing from t=0 to T-1 and using f(x_T) >= f*, we obtain the result. Note that the base case P(0) follows from the initial condition.",
-                page=3,
-                bbox=BoundingBox(page=3, x=72, y=260, width=468, height=80),
-            ),
-            ParsedBlock(
-                block_type="equation",
-                content="E[||grad f(x_t)||^2] <= (2L * (f(x_0) - f*)) / T + sigma^2 / sqrt(T)",
-                page=4,
-                bbox=BoundingBox(page=4, x=120, y=180, width=360, height=30),
-            ),
-            ParsedBlock(
-                block_type="text",
-                content="Equation (14) follows from combining Lemma 3.1 with the variance bound. The left-hand side operates in R^d while the projection matrix W maps to R^{d+1}, yielding the stated result after applying the trace inequality.",
-                page=4,
-                bbox=BoundingBox(page=4, x=72, y=230, width=468, height=60),
-            ),
-            ParsedBlock(
-                block_type="text",
-                content="Our approach is novel compared to prior work [1,2,3] which required strong convexity assumptions. We relax this to L-smoothness only, which is a strictly weaker condition.",
-                page=5,
-                bbox=BoundingBox(page=5, x=72, y=100, width=468, height=40),
-            ),
-            ParsedBlock(
-                block_type="text",
-                content="Related Work: [1] Nesterov (2004) established convergence rates for convex functions. [2] Ghadimi & Lan (2013) studied stochastic gradient methods under convexity. [3] Carmon et al. (2018) provided lower bounds for non-convex optimization.",
-                page=6,
-                bbox=BoundingBox(page=6, x=72, y=72, width=468, height=60),
-            ),
-        ]
+
+def _render_heading(text: str, level: Optional[int]) -> str:
+    lvl = level if isinstance(level, int) and 1 <= level <= 6 else 2
+    prefix = "#" * lvl
+    return f"{prefix} {text}\n\n"
+
+
+def _parse_bbox(item: Dict) -> Optional[BoundingBox]:
+    bbox_raw = item.get("bbox")
+    if not isinstance(bbox_raw, list) or len(bbox_raw) < 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(bbox_raw[i]) for i in range(4))
+    except (TypeError, ValueError):
+        return None
+    page = int(item.get("page_idx", 0)) + 1
+    width = max(x1 - x0, 1.0)
+    height = max(y1 - y0, 1.0)
+    return BoundingBox(page=page, x=x0, y=y0, width=width, height=height)

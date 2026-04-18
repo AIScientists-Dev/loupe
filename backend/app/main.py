@@ -1,46 +1,101 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""ProofAgent API entrypoint."""
+from __future__ import annotations
 
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.config import settings
 from app.routes.papers import router as papers_router
-from app.routes.users import router as users_router
 from app.services.llm_client import LLMClient
 from app.services.mineru_client import MinerUClient
-from app.services.orchestrator import PaperOrchestrator
-from app.services.profile_learner import ProfileLearner
-from app.services.review_generator import ReviewGenerator
+from app.services.orchestrator import Orchestrator
 from app.services.storage import FileStore
 
-app = FastAPI(title="ProofAgent API", version="1.0.0")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="ProofAgent API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-
-app.include_router(papers_router)
-app.include_router(users_router)
 
 # -- singletons ---------------------------------------------------------------
 
 _store = FileStore()
 _llm = LLMClient()
 _mineru = MinerUClient()
-_learner = ProfileLearner(_llm)
-_review_gen = ReviewGenerator(_llm)
-_orchestrator = PaperOrchestrator(_store, _llm, _mineru, _learner, _review_gen)
+_orchestrator = Orchestrator(_store, _llm, _mineru)
 
 
-def get_orchestrator() -> PaperOrchestrator:
+def get_orchestrator() -> Orchestrator:
     return _orchestrator
 
 
-def get_store() -> FileStore:
-    return _store
+# -- error envelope -----------------------------------------------------------
+
+def _envelope(code: str, message: str, detail=None) -> dict:
+    body = {"code": code, "message": message}
+    if detail is not None:
+        body["detail"] = detail
+    return {"error": body}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exc_handler(_req: Request, exc: StarletteHTTPException):
+    detail = exc.detail
+    if isinstance(detail, dict) and "code" in detail and "message" in detail:
+        code = detail["code"]
+        message = detail["message"]
+        extra = detail.get("detail")
+    else:
+        code = {400: "bad_request", 404: "not_found", 405: "method_not_allowed"}.get(
+            exc.status_code, "http_error"
+        )
+        message = str(detail) if detail else code
+        extra = None
+    return JSONResponse(status_code=exc.status_code, content=_envelope(code, message, extra))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exc_handler(_req: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content=_envelope("validation_error", "Request validation failed", exc.errors()),
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exc_handler(_req: Request, exc: Exception):
+    logger.exception("Unhandled error: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content=_envelope("internal", "Internal server error"),
+    )
+
+
+# -- routes -------------------------------------------------------------------
+
+app.include_router(papers_router)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "version": "1.0.0"}
+    return {
+        "ok": True,
+        "version": "2.0.0",
+        "mineru_configured": bool(settings.mineru_api_url),
+        "anthropic_configured": bool(settings.anthropic_api_key),
+    }

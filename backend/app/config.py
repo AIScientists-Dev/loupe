@@ -17,19 +17,26 @@ class Settings(BaseSettings):
 
     # MinerU PDF parser (AWS GPU)
     mineru_api_url: str = ""
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
+    mineru_timeout_seconds: float = 600.0
 
-    # LLM API keys — one per provider
+    # LLM providers
     anthropic_api_key: str = ""
-    openai_api_key: str = ""
-    deepseek_api_key: str = ""
-    moonshot_api_key: str = ""
-    minimax_api_key: str = ""
 
-    # Defaults
-    default_model: str = "claude-opus-4-6"
+    # Models — Sonnet for text, Opus for vision
+    text_model: str = "claude-sonnet-4-6"
+    vision_model: str = "claude-opus-4-7"
+
+    # Data
     data_dir: str = "./data"
+
+    # CORS — whitelist the frontend localhost only
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    # Visual localize concurrency
+    localize_concurrency: int = 3
 
 
 settings = Settings()

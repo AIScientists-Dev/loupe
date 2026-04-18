@@ -3,12 +3,19 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { AnalysisProgress } from "@/components/workspace/analysis-progress";
+import { Workspace } from "@/components/workspace/workspace";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { usePaper, usePaperStatus } from "@/lib/hooks/use-papers";
+import { StatusBadge } from "@/components/papers/status-badge";
+import {
+  useDeletePaper,
+  usePaper,
+  usePaperStatus,
+} from "@/lib/hooks/use-papers";
 
 export default function WorkspacePage({
   params,
@@ -21,8 +28,8 @@ export default function WorkspacePage({
   const isAnalyzing =
     !!paper && paper.status !== "ready" && paper.status !== "failed";
   const statusQuery = usePaperStatus(params.id, isAnalyzing);
+  const deletePaper = useDeletePaper();
 
-  // When the pipeline flips to ready, refetch the full paper so findings land.
   const polledStatus = statusQuery.data?.status;
   React.useEffect(() => {
     if (paper && polledStatus && polledStatus !== paper.status) {
@@ -33,8 +40,8 @@ export default function WorkspacePage({
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex h-16 shrink-0 items-center justify-between border-b border-border px-8">
-        <div className="flex items-center gap-3 min-w-0">
+      <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-border px-6">
+        <div className="flex min-w-0 items-center gap-3">
           <Button variant="ghost" size="icon-sm" asChild>
             <Link href="/papers" aria-label="Back to papers">
               <ArrowLeft className="size-4" />
@@ -51,6 +58,30 @@ export default function WorkspacePage({
             )}
           </div>
         </div>
+        <div className="flex items-center gap-3">
+          {paper && <StatusBadge status={paper.status} />}
+          {paper && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Delete paper"
+              onClick={async () => {
+                if (!confirm("Delete this paper? This cannot be undone.")) return;
+                try {
+                  await deletePaper.mutateAsync(paper.id);
+                  toast.success("Paper deleted");
+                  router.push("/papers");
+                } catch (err) {
+                  toast.error("Delete failed", {
+                    description: err instanceof Error ? err.message : undefined,
+                  });
+                }
+              }}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          )}
+        </div>
       </header>
 
       <section className="flex flex-1 overflow-hidden">
@@ -59,7 +90,7 @@ export default function WorkspacePage({
         ) : !paper ? (
           <NotFoundState />
         ) : paper.status === "ready" ? (
-          <WorkspaceStub findingCount={paper.findings.length} />
+          <Workspace paper={paper} />
         ) : (
           <div className="grid flex-1 place-items-center">
             <AnalysisProgress
@@ -108,22 +139,6 @@ function NotFoundState() {
         <Button variant="outline" className="mt-4" asChild>
           <Link href="/papers">Back to papers</Link>
         </Button>
-      </div>
-    </div>
-  );
-}
-
-function WorkspaceStub({ findingCount }: { findingCount: number }) {
-  return (
-    <div className="grid flex-1 place-items-center">
-      <div className="text-center">
-        <h2 className="text-lg font-semibold">Analysis complete</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Loupe found {findingCount} suspicious step{findingCount === 1 ? "" : "s"}.
-        </p>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Workspace (PDF viewer + findings panel) lands in Hour 3.
-        </p>
       </div>
     </div>
   );
