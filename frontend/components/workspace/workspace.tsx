@@ -22,7 +22,7 @@ export function Workspace({ paper }: { paper: Paper }) {
   const investigate = useInvestigateFinding(paper.id);
 
   return (
-    <div className="grid h-full grid-cols-[minmax(0,1fr)_minmax(420px,460px)]">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(420px,460px)]">
       <PdfViewer
         paperTitle={paper.title}
         findings={paper.findings}

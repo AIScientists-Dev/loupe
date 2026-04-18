@@ -120,7 +120,7 @@ export function FindingCard(props: FindingCardProps) {
           </p>
 
           <blockquote className="mt-2.5 overflow-x-auto rounded-md border border-border/80 bg-muted/40 px-3 py-2 font-serif text-[13px] leading-relaxed text-foreground/85">
-            <Math tex={finding.evidence_quote} />
+            <Formula tex={finding.evidence_quote} />
           </blockquote>
 
           {decided ? (

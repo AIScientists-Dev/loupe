@@ -68,8 +68,8 @@ async function main() {
   // 1. Papers list — light
   await page.goto(`${BASE}/papers`, { waitUntil: "networkidle" });
   await waitForMswReady(page);
-  await page.waitForSelector("text=Sharp Concentration", { timeout: 10_000 });
-  await page.waitForTimeout(400);
+  await page.waitForSelector("text=Sharp Concentration", { timeout: 25_000 });
+  await page.waitForTimeout(600);
   await snap(page, "papers-list");
 
   // 1b. Papers list — dark

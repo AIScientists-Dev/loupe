@@ -6,4 +6,3 @@ pydantic==2.11.7
 pydantic-settings==2.9.1
 PyMuPDF==1.24.13
 markdown==3.8
-weasyprint==65.0

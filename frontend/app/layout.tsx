@@ -34,14 +34,14 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
+      // Bold solid emerald SVG — preferred by modern browsers for tab icons.
       { url: "/favicon.svg", type: "image/svg+xml" },
+      // ICO bundle (16/32/48) — fallback for older browsers.
       { url: "/favicon.ico", sizes: "any" },
+      { url: "/android-chrome-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/android-chrome-512.png", sizes: "512x512", type: "image/png" },
     ],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
-    other: [
-      { rel: "icon", url: "/android-chrome-192.png", sizes: "192x192" },
-      { rel: "icon", url: "/android-chrome-512.png", sizes: "512x512" },
-    ],
   },
   openGraph: {
     title: "Loupe — AI proof reviewer",

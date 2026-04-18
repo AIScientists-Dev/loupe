@@ -87,7 +87,7 @@ export default function WorkspacePage({
         </div>
       </header>
 
-      <section className="flex flex-1 overflow-hidden">
+      <section className="flex min-h-0 flex-1 overflow-hidden">
         {paperQuery.isLoading ? (
           <LoadingState />
         ) : !paper ? (
