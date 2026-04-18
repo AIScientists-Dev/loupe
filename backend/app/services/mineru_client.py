@@ -22,16 +22,41 @@ from app.models import BoundingBox, PageMapEntry
 logger = logging.getLogger(__name__)
 
 
+class MinerUParseResult:
+    """Return shape for parse_pdf: markdown + page_map + elapsed_seconds."""
+    def __init__(self, markdown: str, page_map: List[PageMapEntry], elapsed_seconds: float):
+        self.markdown = markdown
+        self.page_map = page_map
+        self.elapsed_seconds = elapsed_seconds
+
+
 class MinerUClient:
-    async def parse_pdf(self, pdf_bytes: bytes, filename: str) -> Tuple[str, List[PageMapEntry]]:
+    async def parse_pdf(
+        self,
+        pdf_bytes: bytes,
+        filename: str,
+        page_start: Optional[int] = None,
+        page_end: Optional[int] = None,
+    ) -> "MinerUParseResult":
+        """Parse the PDF. page_start/page_end are 1-based inclusive range."""
+        import time
+        start = time.monotonic()
         if settings.mineru_api_url:
-            return await self._parse_remote(pdf_bytes, filename)
-        logger.warning("MINERU_API_URL not set — using local PyMuPDF fallback (no formula parsing)")
-        return self._parse_local(pdf_bytes)
+            md, pm = await self._parse_remote(pdf_bytes, filename, page_start, page_end)
+        else:
+            logger.warning("MINERU_API_URL not set — using local PyMuPDF fallback (no formula parsing)")
+            md, pm = self._parse_local(pdf_bytes, page_start, page_end)
+        return MinerUParseResult(md, pm, time.monotonic() - start)
 
     # -- remote: MinerU /file_parse -------------------------------------------
 
-    async def _parse_remote(self, pdf_bytes: bytes, filename: str) -> Tuple[str, List[PageMapEntry]]:
+    async def _parse_remote(
+        self,
+        pdf_bytes: bytes,
+        filename: str,
+        page_start: Optional[int] = None,
+        page_end: Optional[int] = None,
+    ) -> Tuple[str, List[PageMapEntry]]:
         files = [("files", (filename, pdf_bytes, "application/pdf"))]
         data = {
             "backend": "pipeline",
@@ -42,6 +67,11 @@ class MinerUClient:
             "table_enable": "true",
             "lang_list": "en",
         }
+        if page_start is not None:
+            data["start_page_id"] = str(max(0, int(page_start) - 1))  # 0-based inclusive
+        if page_end is not None:
+            data["end_page_id"] = str(max(0, int(page_end) - 1))      # 0-based inclusive
+
         async with httpx.AsyncClient(timeout=settings.mineru_timeout_seconds) as client:
             resp = await client.post(settings.mineru_api_url, files=files, data=data)
             resp.raise_for_status()
@@ -50,6 +80,19 @@ class MinerUClient:
         content_items = self._extract_content_list(result)
         if not content_items:
             raise RuntimeError("MinerU returned no content_list — PDF unreadable")
+
+        # MinerU emits page_idx relative to the slice (start_page_id → 0).
+        # Shift each item's page_idx by the start offset so our page_map
+        # tracks absolute page numbers in the original PDF.
+        if page_start is not None:
+            shift = max(0, int(page_start) - 1)
+            if shift:
+                for item in content_items:
+                    if isinstance(item, dict) and "page_idx" in item:
+                        try:
+                            item["page_idx"] = int(item["page_idx"]) + shift
+                        except (TypeError, ValueError):
+                            pass
 
         return _build_markdown_and_pagemap(content_items)
 
@@ -80,15 +123,21 @@ class MinerUClient:
     # -- local fallback: PyMuPDF ---------------------------------------------
 
     @staticmethod
-    def _parse_local(pdf_bytes: bytes) -> Tuple[str, List[PageMapEntry]]:
+    def _parse_local(
+        pdf_bytes: bytes,
+        page_start: Optional[int] = None,
+        page_end: Optional[int] = None,
+    ) -> Tuple[str, List[PageMapEntry]]:
         try:
             import fitz  # PyMuPDF
         except ImportError as e:
             raise RuntimeError("PyMuPDF (fitz) required for local PDF fallback") from e
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        start_idx = max(0, (int(page_start) - 1) if page_start is not None else 0)
+        end_idx = min(doc.page_count - 1, (int(page_end) - 1) if page_end is not None else doc.page_count - 1)
         items: List[Dict] = []
-        for page_idx in range(doc.page_count):
+        for page_idx in range(start_idx, end_idx + 1):
             page = doc.load_page(page_idx)
             blocks = page.get_text("blocks")  # [(x0, y0, x1, y1, text, block_no, block_type), ...]
             blocks.sort(key=lambda b: (b[1], b[0]))  # top-to-bottom, left-to-right

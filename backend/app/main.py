@@ -6,7 +6,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
@@ -91,6 +91,14 @@ async def generic_exc_handler(_req: Request, exc: Exception):
 # -- routes -------------------------------------------------------------------
 
 app.include_router(papers_router)
+
+
+@app.get("/source/pricing.py")
+def source_pricing() -> Response:
+    """Serve the pricing formula raw so users can audit every number."""
+    from pathlib import Path
+    p = Path(__file__).parent / "services" / "pricing.py"
+    return Response(content=p.read_text(encoding="utf-8"), media_type="text/x-python; charset=utf-8")
 
 
 @app.get("/health")

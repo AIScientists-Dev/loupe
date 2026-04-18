@@ -3,7 +3,16 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { Finding, PaperStatusResponse, PipelineStep } from "@/lib/types";
+import type {
+  CostReport,
+  Finding,
+  Paper,
+  PaperStatusResponse,
+  PipelineStep,
+  RunState,
+  Segment,
+  SegmentStatus,
+} from "@/lib/types";
 import { paperKeys } from "./use-papers";
 
 /**

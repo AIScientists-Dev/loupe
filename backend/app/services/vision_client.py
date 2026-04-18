@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.config import settings
-from app.services.llm_client import _ANTHROPIC_URL, _PRICES, _extract_json_value, usage_tracker
+from app.services.llm_client import _ANTHROPIC_URL, _extract_json_value, usage_tracker
 
 logger = logging.getLogger(__name__)
 

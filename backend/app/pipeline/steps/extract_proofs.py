@@ -36,37 +36,50 @@ Rules:
 - Output ONLY the JSON array. No markdown fences, no commentary, no prose before or after."""
 
 
-async def run_extract_proofs(paper: Paper, llm: LLMClient, bus=None) -> None:
-    if not paper.markdown:
-        logger.warning("extract_proofs: empty markdown for paper %s", paper.paper_id)
-        paper.proof_blocks = []
-        return
+async def extract_proofs_from_markdown(
+    markdown: str,
+    page_map: List[PageMapEntry],
+    llm: LLMClient,
+) -> List[ProofBlock]:
+    """Run the extractor against a single chunk of markdown + its page_map.
 
-    prompt = f"Markdown:\n\n\"\"\"\n{paper.markdown}\n\"\"\""
-    try:
-        raw = await llm.complete_json(
-            model=settings.text_model,
-            messages=[{"role": "user", "content": prompt}],
-            system=_SYSTEM,
-            temperature=0.0,
-            max_tokens=8192,
-            tag="extract_proofs",
-        )
-    except Exception as exc:
-        logger.exception("extract_proofs: LLM call failed for %s", paper.paper_id)
-        raise
+    Used by the segmented pipeline: pass only the segment's markdown and
+    the slice of page_map covering that segment. char offsets in the
+    returned ProofBlocks are relative to `markdown`. The caller is
+    responsible for shifting them into the paper's aggregate markdown if
+    it wants to merge (offset += aggregate_length at merge time).
+    """
+    if not markdown:
+        return []
+
+    prompt = f"Markdown:\n\n\"\"\"\n{markdown}\n\"\"\""
+    raw = await llm.complete_json(
+        model=settings.text_model,
+        messages=[{"role": "user", "content": prompt}],
+        system=_SYSTEM,
+        temperature=0.0,
+        max_tokens=8192,
+        tag="extract_proofs",
+    )
 
     if not isinstance(raw, list):
         raise ValueError(f"extract_proofs: expected JSON array, got {type(raw).__name__}")
 
     blocks: List[ProofBlock] = []
     for item in raw:
-        block = _item_to_block(item, paper.markdown, paper.page_map)
+        block = _item_to_block(item, markdown, page_map)
         if block:
             blocks.append(block)
+    return blocks
 
-    paper.proof_blocks = blocks
-    logger.info("extract_proofs: paper %s → %d proof blocks", paper.paper_id, len(blocks))
+
+# Backwards-compat wrapper for the old monolithic pipeline (still used by
+# anything that calls it against the whole paper).
+async def run_extract_proofs(paper: Paper, llm: LLMClient, bus=None) -> None:
+    paper.proof_blocks = await extract_proofs_from_markdown(
+        paper.markdown, paper.page_map, llm,
+    )
+    logger.info("extract_proofs: paper %s → %d proof blocks", paper.paper_id, len(paper.proof_blocks))
 
 
 # ---------------------------------------------------------------------------

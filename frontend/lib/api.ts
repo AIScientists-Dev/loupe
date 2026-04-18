@@ -3,6 +3,7 @@
 // In mock mode, MSW intercepts these same URLs in the browser.
 
 import type {
+  CostReport,
   Decision,
   DraftReview,
   Finding,
@@ -99,6 +100,23 @@ export const api = {
 
   pdfUrl: (paperId: string) => `${BASE}/papers/${paperId}/pdf`,
 
+  pageThumbUrl: (paperId: string, page: number) =>
+    `${BASE}/papers/${paperId}/pages/${page}/thumb.png`,
+
   exportReview: (paperId: string, draftId: string, format: "pdf" | "md") =>
     `${BASE}/papers/${paperId}/review/${draftId}/export?format=${format}`,
+
+  stopPaper: (id: string) =>
+    request<Paper>(`/papers/${id}/stop`, { method: "POST" }),
+
+  resumePaper: (id: string) =>
+    request<Paper>(`/papers/${id}/resume`, { method: "POST" }),
+
+  skipSegment: (paperId: string, segmentId: string) =>
+    request<Paper>(`/papers/${paperId}/segments/${segmentId}/skip`, {
+      method: "POST",
+    }),
+
+  getCost: (paperId: string) =>
+    request<CostReport>(`/papers/${paperId}/cost`),
 };

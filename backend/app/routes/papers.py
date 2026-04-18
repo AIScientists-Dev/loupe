@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import Response, StreamingResponse
 
 from app.models import (
+    CostReport,
     DecideRequest,
     Finding,
     InvestigateRequest,
@@ -100,6 +101,50 @@ def serve_pdf(paper_id: str, orch: Orchestrator = Depends(_orch)):
     return Response(content=pdf_bytes, media_type="application/pdf")
 
 
+# -- page thumbnail (for the top thumbnail strip) ----------------------------
+
+@router.get("/{paper_id}/pages/{page_number}/thumb.png")
+def page_thumbnail(
+    paper_id: str,
+    page_number: int,
+    orch: Orchestrator = Depends(_orch),
+):
+    png_bytes = _render_thumb(orch.store, paper_id, page_number)
+    if png_bytes is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Thumbnail not available"})
+    return Response(content=png_bytes, media_type="image/png", headers={
+        "Cache-Control": "public, max-age=3600",
+    })
+
+
+_THUMB_DPI = 72  # low-DPI is plenty for a sidebar thumb
+
+
+def _render_thumb(store, paper_id: str, page_number: int) -> bytes | None:
+    """Lazy-render + cache a per-page thumbnail. Fallback if cache missing."""
+    from pathlib import Path
+    import fitz
+    cache_dir = Path(store.base) / "thumbs" / paper_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"{page_number:04d}.png"
+    if cache_path.exists():
+        return cache_path.read_bytes()
+    pdf_bytes = store.load_pdf(paper_id)
+    if not pdf_bytes:
+        return None
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            if page_number < 1 or page_number > doc.page_count:
+                return None
+            page = doc.load_page(page_number - 1)
+            pix = page.get_pixmap(matrix=fitz.Matrix(_THUMB_DPI / 72.0, _THUMB_DPI / 72.0), alpha=False)
+            png = pix.tobytes("png")
+        cache_path.write_bytes(png)
+        return png
+    except Exception:
+        return None
+
+
 # -- SSE events ---------------------------------------------------------------
 
 @router.get("/{paper_id}/events")
@@ -143,6 +188,48 @@ async def stream_events(paper_id: str, orch: Orchestrator = Depends(_orch)):
             "Connection": "keep-alive",
         },
     )
+
+
+# -- stop / resume / skip / cost --------------------------------------------
+
+@router.post("/{paper_id}/stop", response_model=Paper)
+def stop_run(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    result = orch.stop(paper_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return result
+
+
+@router.post("/{paper_id}/resume", response_model=Paper)
+def resume_run(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    result = orch.resume(paper_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return result
+
+
+@router.post("/{paper_id}/segments/{segment_id}/skip", response_model=Paper)
+def skip_segment(paper_id: str, segment_id: str, orch: Orchestrator = Depends(_orch)):
+    result = orch.skip_segment(paper_id, segment_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper or segment not found"})
+    return result
+
+
+@router.post("/{paper_id}/segments/{segment_id}/include", response_model=Paper)
+def include_segment(paper_id: str, segment_id: str, orch: Orchestrator = Depends(_orch)):
+    result = orch.include_segment(paper_id, segment_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper or segment not found"})
+    return result
+
+
+@router.get("/{paper_id}/cost", response_model=CostReport)
+def get_cost(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    report = orch.build_cost_report(paper_id)
+    if report is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return report
 
 
 # -- localize -----------------------------------------------------------------

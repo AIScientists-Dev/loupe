@@ -29,17 +29,17 @@ _ROUTING: Dict[str, tuple] = {
     "minimax-m2.7": (_MINIMAX_URL, "openai"),
 }
 
-# Per-MTok USD prices: (input, cached_read, output).
-# Used only for observability — logged, not enforced.
-_PRICES: Dict[str, tuple] = {
-    "claude-sonnet-4-6": (3.0, 0.30, 15.0),
-    "claude-opus-4-6":   (15.0, 1.50, 75.0),
-    "claude-opus-4-7":   (15.0, 1.50, 75.0),
-}
+# Pricing lives in app/services/pricing.py — a single open file so users
+# can audit every number. LLMClient only observes + records.
+from app.services.pricing import llm_cost as _compute_llm_cost  # noqa: E402
 
 
 class _UsageTracker:
-    """Process-wide accumulator for token usage + estimated cost (USD)."""
+    """Process-wide accumulator for token usage + estimated cost (USD).
+
+    The paper-level accumulator lives on the Paper model (persisted).
+    This one is an ephemeral counter for ad-hoc scripts and logs.
+    """
     def __init__(self) -> None:
         self.reset()
 
@@ -63,13 +63,7 @@ class _UsageTracker:
         cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
         out_t = int(usage.get("output_tokens", 0) or 0)
 
-        price_in, price_cached, price_out = _PRICES.get(model, (0.0, 0.0, 0.0))
-        cost = (
-            in_t * price_in / 1_000_000
-            + cache_write * price_in * 1.25 / 1_000_000     # cache-write surcharge
-            + cache_read * price_cached / 1_000_000
-            + out_t * price_out / 1_000_000
-        )
+        cost = _compute_llm_cost(model, in_t, cache_write, cache_read, out_t)
 
         self.calls += 1
         self.input_tokens += in_t + cache_write

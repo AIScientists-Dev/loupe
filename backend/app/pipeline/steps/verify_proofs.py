@@ -62,6 +62,7 @@ WEB_SEARCH_TOOL = {
 
 
 async def run_verify_proofs(paper: Paper, llm: LLMClient, event_bus=None) -> None:
+    """Backwards-compat: verify every proof block using paper.markdown as context."""
     event_bus = event_bus or bus
     paper.findings = []
 
@@ -70,7 +71,7 @@ async def run_verify_proofs(paper: Paper, llm: LLMClient, event_bus=None) -> Non
         return
 
     for block in paper.proof_blocks:
-        block_findings = await _verify_block(paper, block, llm)
+        block_findings = await verify_block_against_context(block, paper.markdown, llm)
         for f in block_findings:
             paper.findings.append(f)
             event_bus.emit(paper.paper_id, "finding.created", {"finding": f.model_dump(mode="json")})
@@ -78,9 +79,24 @@ async def run_verify_proofs(paper: Paper, llm: LLMClient, event_bus=None) -> Non
     logger.info("verify_proofs: paper %s → %d findings", paper.paper_id, len(paper.findings))
 
 
+async def verify_block_against_context(
+    block: ProofBlock,
+    context_markdown: str,
+    llm: LLMClient,
+) -> List[Finding]:
+    """Verify a single block using the supplied context markdown."""
+    return await _verify_block_impl(block, context_markdown, llm)
+
+
 async def _verify_block(paper: Paper, block: ProofBlock, llm: LLMClient) -> List[Finding]:
+    # Kept as a thin wrapper for any older callers; new code goes through
+    # verify_block_against_context.
+    return await _verify_block_impl(block, paper.markdown, llm)
+
+
+async def _verify_block_impl(block: ProofBlock, context_markdown: str, llm: LLMClient) -> List[Finding]:
     block_text = _render_block(block)
-    context = _render_context(paper, block)
+    context = context_markdown or ""
 
     # Structured user message with cache_control on the paper context.
     # The first call for this paper writes the cache; subsequent calls for

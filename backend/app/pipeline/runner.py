@@ -1,101 +1,398 @@
-"""Pipeline runner — parse → extract_proofs → verify_proofs.
+"""Segment-based pipeline runner.
 
-On step failure: paper.status = failed, step = failed, error_code/error_message set;
-SSE emits step.failed with retriable flag.
-On success: paper.status = ready, step = ready, step_index = len(PIPELINE_ORDER).
+Lifecycle for a paper:
+
+  1. planning_phase        — PyMuPDF outline → segment plan (one Sonnet call).
+                             Sets paper.segments and paper.pricing_snapshot.
+  2. run_segments_phase    — sequential, priority-ordered. Per segment:
+        parse → extract_proofs → verify_proofs → localize
+     After each, state is checkpointed and SSE events emitted.
+  3. Honors a per-paper asyncio.Event so the user can hit Stop.
+
+The scheduler never starts a segment after a stop signal has been set.
+MinerU calls, once in flight, are not cancelled — they complete, then the
+scheduler breaks.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Callable, List, Tuple
+from typing import Optional
 
-from app.models import PIPELINE_ORDER, Paper, PaperStatus, PipelineStep
-from app.pipeline.steps.extract_proofs import run_extract_proofs
-from app.pipeline.steps.parse import run_parse
-from app.pipeline.steps.verify_proofs import run_verify_proofs
+import httpx
+
+from app.models import (
+    LocalizeStatus,
+    PageMapEntry,
+    Paper,
+    PaperStatus,
+    PipelineStep,
+    RunState,
+    Segment,
+    SegmentClassification,
+    SegmentStatus,
+)
+from app.pipeline.steps.extract_proofs import extract_proofs_from_markdown
+from app.pipeline.steps.localize import localize_findings_on_page
+from app.pipeline.steps.outline import extract_outline
+from app.pipeline.steps.parse import extract_title_from, parse_page_range
+from app.pipeline.steps.plan_segments import plan_segments
+from app.pipeline.steps.verify_proofs import verify_block_against_context
 from app.services.events import bus
-from app.services.llm_client import LLMClient
+from app.services.llm_client import LLMClient, usage_tracker
 from app.services.mineru_client import MinerUClient
+from app.services.pricing import bill_user, gpu_cost, pricing_snapshot
 from app.services.storage import FileStore
+from app.services.vision_client import VisionClient
 
 logger = logging.getLogger(__name__)
+
+# Classifications that get proof extraction + verification. Others are
+# parsed only so pages are visible, but skipped for proof analysis.
+_PROOF_CLASSIFICATIONS = {
+    SegmentClassification.proof,
+    SegmentClassification.theorem,
+}
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def run_pipeline(
+# ============================================================================
+# Phase 1 — planning
+# ============================================================================
+
+async def run_planning(paper: Paper, store: FileStore, llm: LLMClient) -> None:
+    """PyMuPDF outline → Sonnet segment plan. Cheap, fast, deterministic."""
+    pdf_bytes = store.load_pdf(paper.paper_id)
+    if not pdf_bytes:
+        raise FileNotFoundError(f"PDF missing for paper {paper.paper_id}")
+
+    paper.run_state = RunState.planning
+    paper.pricing_snapshot = pricing_snapshot()
+    store.save_paper(paper)
+    bus.emit(paper.paper_id, "planning.started", {})
+
+    headings, page_count = extract_outline(pdf_bytes)
+    paper.page_count = page_count
+
+    before = usage_tracker.cost_usd
+    segments = await plan_segments(headings, page_count, llm)
+    plan_cost = usage_tracker.cost_usd - before
+
+    for seg in segments:
+        if seg.priority <= 0:
+            seg.status = SegmentStatus.skipped
+
+    paper.segments = segments
+    paper.run_state = RunState.running
+    paper.updated_at = _now()
+    store.save_paper(paper)
+
+    bus.emit(paper.paper_id, "outline.ready", {
+        "page_count": page_count,
+        "segments": [s.model_dump(mode="json") for s in segments],
+        "plan_cost_raw_usd": round(plan_cost, 6),
+        "estimate_total_raw_usd": _estimate_total_raw(paper),
+    })
+
+
+# ============================================================================
+# Phase 2 — run segments in priority order
+# ============================================================================
+
+async def run_segments(
     paper: Paper,
     store: FileStore,
     llm: LLMClient,
     mineru: MinerUClient,
-) -> Paper:
-    """Execute the pipeline, saving paper state after each step and emitting SSE."""
-    pid = paper.paper_id
-
-    steps: List[Tuple[PipelineStep, Callable]] = [
-        (PipelineStep.parse,           lambda: run_parse(paper, store, mineru)),
-        (PipelineStep.extract_proofs,  lambda: run_extract_proofs(paper, llm, bus)),
-        (PipelineStep.verify_proofs,   lambda: run_verify_proofs(paper, llm, bus)),
-    ]
-
-    for idx, (step, fn) in enumerate(steps):
-        paper.step = step
-        paper.step_index = idx
-        paper.updated_at = _now()
-        store.save_paper(paper)
-        bus.emit(pid, "step.started", {"step": step.value, "step_index": idx})
-
+    vision: VisionClient,
+    stop_event: asyncio.Event,
+) -> None:
+    while True:
+        if stop_event.is_set():
+            _mark_stopped(paper, store)
+            return
+        seg = _next_pending(paper)
+        if seg is None:
+            break
         try:
-            await fn()
+            await _process_segment(paper, seg, store, llm, mineru, vision)
         except Exception as exc:
-            error_code, retriable = _classify(exc)
-            logger.exception("Pipeline step %s failed for paper %s", step.value, pid)
-            paper.status = PaperStatus.failed
-            paper.step = PipelineStep.failed
-            paper.error_code = error_code
-            paper.error_message = str(exc)
+            logger.exception("segment %s failed: %s", seg.segment_id, exc)
+            seg.status = SegmentStatus.failed
+            seg.finished_at = _now()
             paper.updated_at = _now()
             store.save_paper(paper)
-            bus.emit(pid, "step.failed", {
-                "step": step.value,
-                "error_code": error_code,
+            bus.emit(paper.paper_id, "segment.failed", {
+                "segment_id": seg.segment_id,
+                "error_code": _classify_error(exc),
                 "message": str(exc),
-                "retriable": retriable,
+                "retriable": _is_retriable(exc),
             })
-            return paper
+        _emit_cost_updated(paper)
 
-        paper.updated_at = _now()
-        store.save_paper(paper)
-        bus.emit(pid, "step.completed", {"step": step.value, "step_index": idx})
+    if stop_event.is_set():
+        _mark_stopped(paper, store)
+        return
 
+    paper.run_state = RunState.completed
     paper.status = PaperStatus.ready
     paper.step = PipelineStep.ready
-    paper.step_index = len(PIPELINE_ORDER)
+    paper.step_index = 3
     paper.updated_at = _now()
     store.save_paper(paper)
-    bus.emit(pid, "pipeline.done", {"status": "ready"})
-    logger.info("Pipeline complete for paper %s — %d findings", pid, len(paper.findings))
-    return paper
+    bus.emit(paper.paper_id, "run.completed", {
+        "total_raw_usd": round(paper.total_cost_raw(), 4),
+        "total_billed_usd": bill_user(paper.total_cost_raw()),
+    })
 
 
-def _classify(exc: BaseException) -> Tuple[str, bool]:
-    """Map an exception to (error_code, retriable). Codes locked by contract."""
-    import httpx
+async def _process_segment(
+    paper: Paper,
+    seg: Segment,
+    store: FileStore,
+    llm: LLMClient,
+    mineru: MinerUClient,
+    vision: VisionClient,
+) -> None:
+    seg.started_at = _now()
+    seg.status = SegmentStatus.parsing
+    paper.updated_at = _now()
+    store.save_paper(paper)
+    page_span = seg.page_end - seg.page_start + 1
+    # Empirical rate on g6.xlarge from the fixture: ~34s/page. Frontend uses
+    # this to interpolate a page-level playhead during parse (MinerU doesn't
+    # expose mid-request progress).
+    seconds_per_page_estimate = 34.0
+    bus.emit(paper.paper_id, "segment.started", {
+        "segment_id": seg.segment_id,
+        "label": seg.label,
+        "page_start": seg.page_start,
+        "page_end": seg.page_end,
+        "classification": seg.classification.value,
+        "priority": seg.priority,
+        "mineru_eta_seconds": round(page_span * seconds_per_page_estimate, 1),
+        "mineru_seconds_per_page_estimate": seconds_per_page_estimate,
+    })
 
+    pdf_bytes = store.load_pdf(paper.paper_id)
+    if not pdf_bytes:
+        raise FileNotFoundError(f"PDF missing for paper {paper.paper_id}")
+
+    seg_md, seg_pm, elapsed = await parse_page_range(
+        pdf_bytes, paper.filename, mineru,
+        page_start=seg.page_start, page_end=seg.page_end,
+    )
+    seg.gpu_seconds = elapsed
+    seg.gpu_cost_usd = gpu_cost(elapsed)
+
+    # Merge segment output into paper aggregates.
+    offset = len(paper.markdown)
+    separator = "\n\n" if paper.markdown else ""
+    paper.markdown += separator + seg_md
+    sep_len = len(separator)
+    for entry in seg_pm:
+        paper.page_map.append(PageMapEntry(
+            page=entry.page,
+            block_type=entry.block_type,
+            char_start=entry.char_start + offset + sep_len,
+            char_end=entry.char_end + offset + sep_len,
+            bbox=entry.bbox,
+            section=entry.section,
+        ))
+    if not paper.title:
+        paper.title = extract_title_from(paper.page_map, paper.markdown)
+
+    paper.updated_at = _now()
+    store.save_paper(paper)
+    bus.emit(paper.paper_id, "segment.parsed", {
+        "segment_id": seg.segment_id,
+        "mineru_seconds": round(elapsed, 2),
+        "gpu_cost_raw_usd": round(seg.gpu_cost_usd, 6),
+    })
+
+    if seg.classification not in _PROOF_CLASSIFICATIONS:
+        seg.status = SegmentStatus.done
+        seg.finished_at = _now()
+        paper.updated_at = _now()
+        store.save_paper(paper)
+        bus.emit(paper.paper_id, "segment.completed", {
+            "segment_id": seg.segment_id,
+            "cost_subtotal_raw_usd": seg.cost_subtotal_usd(),
+            "cost_subtotal_billed_usd": bill_user(seg.cost_subtotal_usd()),
+            "finding_count": 0,
+        })
+        return
+
+    # -- extract ---------------------------------------------------------
+    seg.status = SegmentStatus.extracting
+    store.save_paper(paper)
+
+    cost_before = usage_tracker.cost_usd
+    new_blocks = await extract_proofs_from_markdown(seg_md, seg_pm, llm)
+    for b in new_blocks:
+        b.char_start += offset + sep_len
+        b.char_end += offset + sep_len
+        paper.proof_blocks.append(b)
+        seg.proof_block_ids.append(b.proof_block_id)
+    seg.llm_cost_usd += usage_tracker.cost_usd - cost_before
+    paper.updated_at = _now()
+    store.save_paper(paper)
+    bus.emit(paper.paper_id, "segment.extracted", {
+        "segment_id": seg.segment_id,
+        "proof_blocks_count": len(new_blocks),
+    })
+
+    # -- verify ----------------------------------------------------------
+    seg.status = SegmentStatus.verifying
+    store.save_paper(paper)
+    for block in new_blocks:
+        cost_before = usage_tracker.cost_usd
+        findings = await verify_block_against_context(block, paper.markdown, llm)
+        seg.llm_cost_usd += usage_tracker.cost_usd - cost_before
+        for f in findings:
+            paper.findings.append(f)
+            seg.finding_ids.append(f.finding_id)
+            bus.emit(paper.paper_id, "finding.created", {
+                "segment_id": seg.segment_id,
+                "finding": f.model_dump(mode="json"),
+            })
+    paper.updated_at = _now()
+    store.save_paper(paper)
+
+    # -- localize (batched per page) ------------------------------------
+    seg.status = SegmentStatus.localizing
+    store.save_paper(paper)
+
+    findings_list = [paper.finding(fid) for fid in seg.finding_ids]
+    pending = [
+        f for f in findings_list
+        if f is not None and f.localize_status == LocalizeStatus.pending and not f.soft_deleted
+    ]
+    by_page: dict = {}
+    for f in pending:
+        by_page.setdefault(f.page, []).append(f)
+    for page_num, fs in sorted(by_page.items()):
+        cost_before = usage_tracker.cost_usd
+        await localize_findings_on_page(paper, fs, store, vision)
+        seg.llm_cost_usd += usage_tracker.cost_usd - cost_before
+        for f in fs:
+            bus.emit(paper.paper_id, "localize.completed", {
+                "segment_id": seg.segment_id,
+                "finding_id": f.finding_id,
+                "localize_status": f.localize_status.value,
+                "bbox": f.bbox.model_dump(mode="json") if f.bbox else None,
+            })
+
+    seg.status = SegmentStatus.done
+    seg.finished_at = _now()
+    paper.updated_at = _now()
+    store.save_paper(paper)
+    bus.emit(paper.paper_id, "segment.completed", {
+        "segment_id": seg.segment_id,
+        "cost_subtotal_raw_usd": seg.cost_subtotal_usd(),
+        "cost_subtotal_billed_usd": bill_user(seg.cost_subtotal_usd()),
+        "finding_count": len(seg.finding_ids),
+    })
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def _next_pending(paper: Paper) -> Optional[Segment]:
+    candidates = [
+        s for s in paper.segments
+        if s.status == SegmentStatus.pending and s.priority > 0
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda s: (-s.priority, s.page_start))
+    return candidates[0]
+
+
+def _estimate_total_raw(paper: Paper) -> float:
+    """Rough forward-looking estimate for UI — cheap heuristic."""
+    per_page = {
+        SegmentClassification.proof: 0.04,
+        SegmentClassification.theorem: 0.03,
+        SegmentClassification.background: 0.01,
+        SegmentClassification.experiment: 0.01,
+        SegmentClassification.figures: 0.0,
+        SegmentClassification.other: 0.01,
+    }
+    total = 0.0
+    for s in paper.segments:
+        if s.priority <= 0:
+            continue
+        pages = s.page_end - s.page_start + 1
+        total += pages * per_page.get(s.classification, 0.01)
+    return round(total, 4)
+
+
+def _emit_cost_updated(paper: Paper) -> None:
+    raw = paper.total_cost_raw()
+    bus.emit(paper.paper_id, "cost.updated", {
+        "running_raw_usd": round(raw, 4),
+        "running_billed_usd": bill_user(raw),
+    })
+
+
+def _mark_stopped(paper: Paper, store: FileStore) -> None:
+    paper.run_state = RunState.stopped
+    paper.updated_at = _now()
+    store.save_paper(paper)
+    bus.emit(paper.paper_id, "run.stopped", {"reason": "user"})
+
+
+def _classify_error(exc: BaseException) -> str:
     if isinstance(exc, FileNotFoundError):
-        return "pdf_unreadable", False
+        return "pdf_unreadable"
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code if exc.response is not None else 0
         if status == 429:
-            return "llm_rate_limited", True
+            return "llm_rate_limited"
         if 500 <= status < 600:
-            return "mineru_unavailable" if "mineru" in str(exc).lower() else "llm_error", True
-        return "llm_error", False
+            return "mineru_unavailable" if "mineru" in str(exc).lower() else "llm_error"
+        return "llm_error"
     if isinstance(exc, httpx.RequestError):
-        return "mineru_unavailable", True
+        return "mineru_unavailable"
     if isinstance(exc, ValueError):
-        return "llm_invalid_response", False
-    return "internal", False
+        return "llm_invalid_response"
+    return "internal"
+
+
+def _is_retriable(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code if exc.response is not None else 0
+        return status == 429 or 500 <= status < 600
+    return isinstance(exc, httpx.RequestError)
+
+
+# ============================================================================
+# Entry point
+# ============================================================================
+
+async def run_full_pipeline(
+    paper: Paper,
+    store: FileStore,
+    llm: LLMClient,
+    mineru: MinerUClient,
+    vision: VisionClient,
+    stop_event: asyncio.Event,
+) -> None:
+    if paper.run_state in (RunState.idle, RunState.failed):
+        await run_planning(paper, store, llm)
+        paper = store.load_paper(paper.paper_id) or paper
+
+    if paper.run_state == RunState.stopped:
+        return
+
+    paper.run_state = RunState.running
+    store.save_paper(paper)
+    bus.emit(paper.paper_id, "run.started", {})
+
+    await run_segments(paper, store, llm, mineru, vision, stop_event)

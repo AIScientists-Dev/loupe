@@ -10,6 +10,7 @@ export const paperKeys = {
   list: () => [...paperKeys.all, "list"] as const,
   detail: (id: string) => [...paperKeys.all, "detail", id] as const,
   status: (id: string) => [...paperKeys.all, "status", id] as const,
+  cost: (id: string) => [...paperKeys.all, "cost", id] as const,
 };
 
 export function usePaperList() {
@@ -68,6 +69,42 @@ export function useDecideFinding(paperId: string) {
     }) => api.decideFinding(paperId, findingId, decision, note),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) }),
+  });
+}
+
+export function usePaperCost(paperId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: paperKeys.cost(paperId),
+    queryFn: () => api.getCost(paperId),
+    enabled,
+    refetchInterval: 2_000,
+  });
+}
+
+export function useStopPaper() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.stopPaper(id),
+    onSuccess: (paper) =>
+      qc.setQueryData(paperKeys.detail(paper.id), paper),
+  });
+}
+
+export function useResumePaper() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.resumePaper(id),
+    onSuccess: (paper) =>
+      qc.setQueryData(paperKeys.detail(paper.id), paper),
+  });
+}
+
+export function useSkipSegment(paperId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (segmentId: string) => api.skipSegment(paperId, segmentId),
+    onSuccess: (paper) =>
+      qc.setQueryData(paperKeys.detail(paperId), paper),
   });
 }
 

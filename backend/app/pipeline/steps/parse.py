@@ -1,27 +1,32 @@
-"""Step 1 — parse PDF via MinerU (or local PyMuPDF fallback).
+"""Parse one page range via MinerU (or local PyMuPDF fallback).
 
-Sets: paper.markdown, paper.page_map, paper.title (heuristic).
+Used by the segment scheduler. Returns (markdown, page_map, elapsed_seconds).
+The caller merges the result into the paper's aggregate markdown/page_map.
 """
 from __future__ import annotations
 
-from app.models import Paper
-from app.services.mineru_client import MinerUClient
-from app.services.storage import FileStore
+from typing import List, Optional, Tuple
+
+from app.models import PageMapEntry
+from app.services.mineru_client import MinerUClient, MinerUParseResult
 
 
-async def run_parse(paper: Paper, store: FileStore, mineru: MinerUClient) -> None:
-    pdf_bytes = store.load_pdf(paper.paper_id)
-    if not pdf_bytes:
-        raise FileNotFoundError(f"PDF missing for paper {paper.paper_id}")
+async def parse_page_range(
+    pdf_bytes: bytes,
+    filename: str,
+    mineru: MinerUClient,
+    page_start: Optional[int] = None,
+    page_end: Optional[int] = None,
+) -> Tuple[str, List[PageMapEntry], float]:
+    result: MinerUParseResult = await mineru.parse_pdf(
+        pdf_bytes, filename,
+        page_start=page_start, page_end=page_end,
+    )
+    return result.markdown, result.page_map, result.elapsed_seconds
 
-    markdown, page_map = await mineru.parse_pdf(pdf_bytes, paper.filename)
-    paper.markdown = markdown
-    paper.page_map = page_map
-    paper.title = _extract_title(page_map, markdown) or paper.title
 
-
-def _extract_title(page_map, markdown: str) -> str | None:
-    """First page-1 heading → title (reasonably short)."""
+def extract_title_from(page_map, markdown: str) -> str | None:
+    """First page-1 heading → title (short ones only)."""
     for entry in page_map:
         if entry.block_type == "heading" and entry.page == 1:
             snippet = markdown[entry.char_start:entry.char_end].strip()
