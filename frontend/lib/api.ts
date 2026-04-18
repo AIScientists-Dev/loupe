@@ -1,0 +1,104 @@
+// Typed fetch layer for the Loupe backend.
+// Rewrites /api/* → http://localhost:8010/* via next.config.mjs.
+// In mock mode, MSW intercepts these same URLs in the browser.
+
+import type {
+  Decision,
+  DraftReview,
+  Finding,
+  Paper,
+  PaperStatusResponse,
+  PaperSummary,
+} from "./types";
+
+const BASE = "/api/v1";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    let payload: unknown = null;
+    try {
+      payload = await res.json();
+    } catch {
+      // ignore
+    }
+    const msg =
+      (payload as { error?: { message?: string } })?.error?.message ??
+      `Request failed: ${res.status}`;
+    throw new Error(msg);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+export const api = {
+  listPapers: () => request<PaperSummary[]>("/papers"),
+
+  getPaper: (id: string) => request<Paper>(`/papers/${id}`),
+
+  getStatus: (id: string) =>
+    request<PaperStatusResponse>(`/papers/${id}/status`),
+
+  deletePaper: (id: string) =>
+    request<void>(`/papers/${id}`, { method: "DELETE" }),
+
+  uploadPaper: async (file: File): Promise<Paper> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/papers`, { method: "POST", body: form });
+    if (!res.ok) {
+      let payload: unknown = null;
+      try {
+        payload = await res.json();
+      } catch {}
+      const msg =
+        (payload as { error?: { message?: string } })?.error?.message ??
+        "Upload failed";
+      throw new Error(msg);
+    }
+    return res.json();
+  },
+
+  decideFinding: (paperId: string, findingId: string, decision: Decision, note?: string) =>
+    request<Finding>(
+      `/papers/${paperId}/findings/${findingId}/decide`,
+      {
+        method: "POST",
+        body: JSON.stringify({ verdict: decision, note }),
+      }
+    ),
+
+  investigateFinding: (paperId: string, findingId: string, message: string) =>
+    request<Finding>(`/papers/${paperId}/findings/${findingId}/investigate`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+
+  localizeFinding: (paperId: string, findingId: string) =>
+    request<Finding>(`/papers/${paperId}/findings/${findingId}/localize`, {
+      method: "POST",
+    }),
+
+  generateReview: (paperId: string) =>
+    request<DraftReview>(`/papers/${paperId}/review/generate`, { method: "POST" }),
+
+  getReview: (paperId: string, draftId: string) =>
+    request<DraftReview>(`/papers/${paperId}/review/${draftId}`),
+
+  updateReview: (paperId: string, draftId: string, markdown: string) =>
+    request<DraftReview>(`/papers/${paperId}/review/${draftId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ markdown }),
+    }),
+
+  pdfUrl: (paperId: string) => `${BASE}/papers/${paperId}/pdf`,
+
+  exportReview: (paperId: string, draftId: string, format: "pdf" | "md") =>
+    `${BASE}/papers/${paperId}/review/${draftId}/export?format=${format}`,
+};

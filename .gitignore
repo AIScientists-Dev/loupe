@@ -1,0 +1,37 @@
+# Environment
+.env
+.env.local
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+
+# Data
+data/
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,179 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{definition}
+\newtheorem{assumption}{Assumption}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\RR}{\mathbb{R}}
+\renewcommand{\Pr}{\mathbb{P}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{Non-Asymptotic Convergence of Variance-Reduced Stochastic\\ Gradient Methods under Heavy-Tailed Noise}
+\author{A.\ Theorist \and B.\ Analyst}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study the non-asymptotic convergence behavior of a variance-reduced stochastic gradient method (VR-SGD) under heavy-tailed gradient noise with finite $p$-th moment for $p \in (1, 2]$. Our contributions are (i) a telescoping identity for cumulative step-weighted variance, (ii) a concentration inequality for weighted sums of sub-Gaussian random variables, and (iii) a high-probability convergence rate of order $O(n^{-(p-1)/p})$ for smooth non-convex objectives. The analysis avoids the uniform-gradient-boundedness assumption prevalent in earlier work.
+\end{abstract}
+
+\section{Introduction}
+
+Stochastic gradient methods are the dominant optimization primitive in modern machine learning. Classical analyses assume light-tailed, e.g.\ sub-Gaussian, gradient noise. A growing empirical literature \citep{zhang2020adaptive, gurbuzbalaban2021heavy} documents heavy-tailed gradient distributions in deep learning pipelines, motivating analyses that go beyond the finite-variance regime.
+
+We consider the unconstrained problem $\min_{x \in \RR^d} f(x)$ with $f : \RR^d \to \RR$ differentiable, approached via
+\begin{equation}\label{eq:sgd}
+x_{t+1} = x_t - \eta_t g_t, \qquad t = 0, 1, 2, \ldots,
+\end{equation}
+where $\eta_t > 0$ is a step size and $g_t$ is an unbiased stochastic estimate of $\nabla f(x_t)$. Let $\mathcal{F}_t := \sigma(x_0, g_0, \ldots, g_{t-1})$ denote the natural filtration.
+
+\subsection{Related Work}
+
+Convergence analyses of stochastic gradient methods under light-tailed noise are classical; see \citet{zhang2020adaptive} and references therein. The heavy-tailed regime has received renewed attention following the empirical observations of \citet{gurbuzbalaban2021heavy}, who argue that gradient noise in deep networks is better modeled by $\alpha$-stable distributions than by Gaussians. Our analysis differs from prior work in three respects: (i) we dispense entirely with the uniform-boundedness assumption on iterates, (ii) we allow the noise tail index $p$ to approach $1$, and (iii) our constants are explicit in $L$, $\sigma$, and the initial suboptimality $\Delta_0$, rather than suppressed as absolute constants.
+
+\section{Preliminaries and Assumptions}
+
+We impose three assumptions throughout.
+
+\begin{assumption}[Smoothness]\label{a:smooth}
+$f$ is $L$-smooth on $\RR^d$: $\|\nabla f(x) - \nabla f(y)\| \le L\|x - y\|$ for all $x, y \in \RR^d$.
+\end{assumption}
+
+\begin{assumption}[Bounded $p$-th moment]\label{a:moment}
+There exist $\sigma > 0$ and $p \in (1, 2]$ such that, for every $t \ge 0$,
+$\E\!\left[ \|g_t - \nabla f(x_t)\|^p \,\big|\, \mathcal{F}_t \right] \le \sigma^p$
+almost surely.
+\end{assumption}
+
+\begin{assumption}[Lower-bounded objective]\label{a:lower}
+$f^\star := \inf_{x \in \RR^d} f(x) > -\infty$.
+\end{assumption}
+
+We write $\Delta_0 := f(x_0) - f^\star$ and denote the step-size schedule by $\{\eta_t\}_{t \ge 0}$. We do \emph{not} assume uniform boundedness of the iterates $\{x_t\}$ or of the stochastic gradients $\{g_t\}$.
+
+\newpage
+\section{A Telescoping Identity}
+
+We begin with a simple accounting lemma for step-weighted cumulative variance. Let $\xi_t := g_t - \nabla f(x_t)$ denote the noise at step $t$.
+
+\begin{lemma}[Telescoping identity]\label{lem:telescope}
+Fix a constant step size $\eta_t \equiv \eta > 0$. For every $n \ge 1$,
+\begin{equation}\label{eq:telescope}
+\sum_{t=0}^{n-1} \eta \, \E\!\left[ \|\xi_t\|^2 \right]
+\;\le\; \eta^2 \sigma^2 \cdot \sum_{k=1}^{n} k
+\;=\; \eta^2 \sigma^2 \cdot \frac{n^2}{2}.
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+By Assumption~\ref{a:moment} with $p = 2$, $\E[\|\xi_t\|^2 \mid \mathcal{F}_t] \le \sigma^2$. Tower property gives $\E[\|\xi_t\|^2] \le \sigma^2$ and hence $\sum_{t=0}^{n-1} \eta\, \E[\|\xi_t\|^2] \le \eta n \sigma^2$. Multiplying and dividing by $\eta$ within the summand and collecting the geometric progression of partial sums yields the right-hand side of~\eqref{eq:telescope}.
+\end{proof}
+
+Equation~\eqref{eq:telescope} will be invoked in the proof of Theorem~\ref{thm:main} below, where it controls the second-order term in the standard descent lemma.
+
+A complementary bound, obtained from Cauchy--Schwarz, is
+\begin{equation}\label{eq:cs}
+\left( \sum_{t=0}^{n-1} \|\xi_t\| \right)^2 \le n \sum_{t=0}^{n-1} \|\xi_t\|^2,
+\end{equation}
+which we use when integrating against $\ell_1$-type envelope functions.
+
+\section{Main Convergence Result}
+
+\begin{theorem}[Convergence in probability]\label{thm:main}
+Let Assumptions~\ref{a:smooth}--\ref{a:lower} hold and fix $\eta \in (0, 1/L)$. Then for any $\epsilon > 0$ and all $n \ge 1$,
+\begin{equation}\label{eq:thm-main}
+\Pr\!\left( \min_{0 \le t \le n-1} \|\nabla f(x_t)\| \le \epsilon \right)
+\;\le\; \exp\!\left( -\frac{n\epsilon^2}{2\sigma^2} \right).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+The standard descent lemma gives, using Assumption~\ref{a:smooth} and~\eqref{eq:sgd},
+\begin{equation}\label{eq:descent}
+f(x_{t+1}) \le f(x_t) - \eta \langle \nabla f(x_t), g_t \rangle + \frac{L\eta^2}{2} \|g_t\|^2.
+\end{equation}
+Taking conditional expectation on $\mathcal{F}_t$ and using unbiasedness of $g_t$,
+$\E[f(x_{t+1}) \mid \mathcal{F}_t] \le f(x_t) - \eta \|\nabla f(x_t)\|^2 + \frac{L\eta^2}{2}(\|\nabla f(x_t)\|^2 + \sigma^2)$.
+By Assumption~4 (uniform boundedness of the iterates) we have $\|x_t\| \le R$ for all $t$, whence the drift term $\eta \|\nabla f(x_t)\|^2$ is bounded above by $\eta L^2 R^2$ and the error term telescopes. A Markov inequality on the exponentiated deviation, combined with Lemma~\ref{lem:telescope}, yields~\eqref{eq:thm-main}.
+\end{proof}
+
+Equation~\eqref{eq:thm-main} is the central non-asymptotic bound of this work. It says that the probability of encountering a near-stationary iterate in the first $n$ steps decays exponentially in $n$, uniformly over the step-size schedule.
+
+\newpage
+\section{Concentration Analysis}
+
+The next lemma refines Theorem~\ref{thm:main} by controlling the tails of the cumulative noise sequence directly.
+
+\begin{lemma}[Hoeffding-type bound]\label{lem:hoeff}
+Let $X_1, \ldots, X_n$ be independent, mean-zero, sub-Gaussian random variables with parameter $\tau > 0$, i.e.\ $\E[\exp(\lambda X_i)] \le \exp(\lambda^2 \tau^2 / 2)$ for all $\lambda \in \RR$. Then for any $\epsilon > 0$,
+\begin{equation}\label{eq:hoeff}
+\Pr\!\left( \left| \sum_{i=1}^{n} X_i \right| \ge n\epsilon \right)
+\;\le\; 2\exp\!\left( -\frac{n\epsilon}{2\tau^2} \right).
+\end{equation}
+\end{lemma}
+
+\begin{proof}[Proof sketch]
+By the standard Cram\'er--Chernoff argument, $\Pr(\sum_i X_i \ge n\epsilon) \le \exp(-n\epsilon \lambda) \cdot \prod_i \E[\exp(\lambda X_i)] \le \exp(n\lambda^2 \tau^2 / 2 - n\epsilon \lambda)$. Optimizing over $\lambda$ gives the claim; the two-sided bound follows by symmetry.
+\end{proof}
+
+\begin{proposition}[Application to noise sequence]\label{prop:noise}
+Under Assumption~\ref{a:moment} with $p = 2$ and independence across $t$,
+$\Pr\!\left( \left| \sum_{t=0}^{n-1} \|\xi_t\|^2 - n \sigma^2 \right| \ge n\epsilon \right) \le 2\exp(-n\epsilon/(2\sigma^4))$
+for all $\epsilon > 0$.
+\end{proposition}
+
+Proposition~\ref{prop:noise} is a direct consequence of Lemma~\ref{lem:hoeff} applied to the centered sequence $\|\xi_t\|^2 - \E[\|\xi_t\|^2]$, which is sub-Gaussian with parameter $O(\sigma^2)$ under mild regularity.
+
+A standard application of Jensen's inequality gives, for any convex $\phi$ and random $X$ with $\E|X| < \infty$, $\phi(\E X) \le \E \phi(X)$; we use this repeatedly below in the form $(\E X)^2 \le \E X^2$.
+
+\section{High-Probability Convergence Rate}
+
+Combining Theorem~\ref{thm:main} with the concentration analysis of the previous section produces a high-probability guarantee.
+
+\begin{corollary}[Uniform high-probability rate]\label{cor:hp}
+Under Assumptions~\ref{a:smooth}--\ref{a:lower}, there exists $\delta_0 > 0$ and a constant $C = C(L, \sigma, \Delta_0) > 0$ such that, for all $\delta \in (0, \delta_0)$ and all $n \ge 1$,
+\begin{equation}\label{eq:cor-hp}
+\Pr\!\left( \|\nabla f(x_n)\|^2 \ge \delta \right)
+\;\le\; \frac{C}{n\, \delta}.
+\end{equation}
+\end{corollary}
+
+\begin{proof}
+Apply Theorem~\ref{thm:main} with $\epsilon = \sqrt{\delta}$. For each fixed $\delta > 0$, there exists $N(\delta) \ge 1$ such that for all $n \ge N(\delta)$ the right-hand side of~\eqref{eq:thm-main} is bounded by $C/(n\delta)$; standard algebra then delivers~\eqref{eq:cor-hp}.
+\end{proof}
+
+Corollary~\ref{cor:hp} matches, up to the constant $C$, the best rates known in the heavy-tailed setting \citep{zhang2020adaptive}.
+
+\subsection{Discussion of the rate}
+
+The $n^{-(p-1)/p}$ rate deserves a few remarks. When $p = 2$ (the sub-Gaussian setting), Corollary~\ref{cor:hp} recovers the $O(1/n)$ rate of Nemirovski et al. When $p \to 1$, the bound degrades to a trivial one, reflecting the fundamental hardness of optimization under noise with unbounded first moment. The constant $C$ is explicit: a direct tracking of the argument gives $C = 8 L \Delta_0 + 4\sigma^2$, which matches the best known dependence in $L$ and is linear in both $\Delta_0$ and $\sigma^2$.
+
+We emphasize that the step-size schedule enters only through the telescoping lemma, and the main bound~\eqref{eq:thm-main} remains valid for any decreasing schedule $\eta_t = \eta_0 / (1 + t)^{\alpha}$ with $\alpha \in [0, 1/2]$, modulo obvious modifications to the constants.
+
+\section{Conclusion}
+
+We have established a clean, non-asymptotic convergence result for VR-SGD under heavy-tailed gradient noise, requiring only smoothness, a bounded $p$-th moment, and a lower-bounded objective. The two key technical ingredients are the telescoping identity of Lemma~\ref{lem:telescope} and the Hoeffding-type concentration bound of Lemma~\ref{lem:hoeff}. Extensions to adaptive step sizes and to the constrained setting are natural directions for future work.
+
+\begin{thebibliography}{9}
+\bibitem[Zhang et al.(2020)]{zhang2020adaptive}
+J.\ Zhang, S.\ P.\ Karimireddy, A.\ Veit, S.\ Kim, S.\ Reddi, S.\ Kumar, S.\ Sra (2020).
+\emph{Why are Adaptive Methods Good for Attention Models?}
+Advances in Neural Information Processing Systems.
+
+\bibitem[G\"urb\"uzbalaban et al.(2021)]{gurbuzbalaban2021heavy}
+M.\ G\"urb\"uzbalaban, U.\ \c{S}im\c{s}ekli, L.\ Zhu (2021).
+\emph{The Heavy-Tail Phenomenon in SGD}.
+International Conference on Machine Learning.
+\end{thebibliography}
+
+\end{document}

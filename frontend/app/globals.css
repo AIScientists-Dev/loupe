@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --radius: 0.625rem;
+
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+
+    --primary: oklch(0.432 0.095 166.913);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+
+    --brand: oklch(0.623 0.214 259.815);
+    --highlight: oklch(0.852 0.199 91.936);
+
+    --severity-high: oklch(0.577 0.245 27.325);
+    --severity-medium: oklch(0.741 0.172 61.55);
+    --severity-low: oklch(0.623 0.214 259.815);
+
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+  }
+
+  .dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+
+    --primary: oklch(0.742 0.171 164.83);
+    --primary-foreground: oklch(0.145 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+
+    --brand: oklch(0.707 0.165 254.624);
+    --highlight: oklch(0.852 0.199 91.936);
+
+    --severity-high: oklch(0.704 0.191 22.216);
+    --severity-medium: oklch(0.82 0.162 81);
+    --severity-low: oklch(0.707 0.165 254.624);
+
+    --sidebar: oklch(0.18 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.742 0.171 164.83);
+    --sidebar-primary-foreground: oklch(0.145 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  /* Base size tuned for senior readers. Everything else scales via rem.
+     16px (browser default) → 17.5px here = +9% larger UI globally. */
+  html {
+    font-size: 17.5px;
+    line-height: 1.55;
+  }
+
+  @media (max-width: 1280px) {
+    html {
+      font-size: 16.5px;
+    }
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  /* Tighter `text-[11px]` feels cramped at this base — nudge tiny labels up. */
+  .text-\[11px\] {
+    font-size: 0.72rem;
+  }
+}
+
+@layer utilities {
+  .katex {
+    font-size: 1.05em;
+  }
+
+  /* Sonner toast — match Morphmind sibling look */
+  [data-sonner-toast] {
+    background-color: var(--popover) !important;
+    color: var(--popover-foreground) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: calc(var(--radius) - 2px) !important;
+    box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.18) !important;
+  }
+
+  [data-sonner-toaster] {
+    z-index: 9999 !important;
+  }
+}
