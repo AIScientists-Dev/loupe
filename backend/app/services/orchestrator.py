@@ -123,6 +123,12 @@ class Orchestrator:
         return paper
 
     def resume(self, paper_id: str) -> Optional[Paper]:
+        """Flip run_state back to running + clear the stop flag.
+
+        Does NOT kick the background task — the route handler is responsible
+        for that (via FastAPI BackgroundTasks), so we don't need an event
+        loop here. Keeps the method synchronous and callable from tests.
+        """
         paper = self.store.load_paper(paper_id)
         if not paper:
             return None
@@ -135,7 +141,6 @@ class Orchestrator:
         paper.updated_at = _now()
         self.store.save_paper(paper)
         bus.emit(paper_id, "run.resumed", {})
-        asyncio.create_task(self.run_pipeline_task(paper_id))
         return paper
 
     def skip_segment(self, paper_id: str, segment_id: str) -> Optional[Paper]:

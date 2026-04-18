@@ -60,6 +60,58 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _save_merging_other_segments(store: FileStore, in_mem: Paper) -> None:
+    """Persist `in_mem` without clobbering OTHER segments' mutations.
+
+    The runner and route handlers can both write to the same Paper. The
+    runner owns only: the current segment's fields, aggregate markdown +
+    page_map, proof_blocks, findings, run_state, updated_at. Other
+    segments might have been mutated by concurrent skip/include requests,
+    so we reload from disk and only overwrite the fields the runner owns.
+    """
+    disk = store.load_paper(in_mem.paper_id)
+    if disk is None:
+        store.save_paper(in_mem)
+        return
+
+    # Aggregate content the runner grows:
+    disk.markdown = in_mem.markdown
+    disk.page_map = in_mem.page_map
+    disk.proof_blocks = in_mem.proof_blocks
+    disk.findings = in_mem.findings
+    disk.run_state = in_mem.run_state
+    disk.status = in_mem.status
+    disk.step = in_mem.step
+    disk.step_index = in_mem.step_index
+    disk.title = in_mem.title or disk.title
+    disk.page_count = in_mem.page_count or disk.page_count
+    disk.updated_at = in_mem.updated_at
+    disk.pricing_snapshot = in_mem.pricing_snapshot or disk.pricing_snapshot
+
+    # Segment-list merge:
+    #   - If disk has fewer segments than in_mem (e.g. runner just planned),
+    #     the runner is authoritative — use its list wholesale.
+    #   - Otherwise, walk disk's segments and adopt the runner's versions
+    #     unless disk has been flipped to skipped/included by a concurrent
+    #     route call while the runner still thinks the segment is pending.
+    if len(in_mem.segments) > len(disk.segments):
+        disk.segments = list(in_mem.segments)
+    else:
+        by_id = {s.segment_id: s for s in in_mem.segments}
+        for i, s_disk in enumerate(disk.segments):
+            s_mem = by_id.get(s_disk.segment_id)
+            if s_mem is None:
+                continue
+            if (
+                s_disk.status == SegmentStatus.skipped
+                and s_mem.status == SegmentStatus.pending
+            ):
+                continue
+            disk.segments[i] = s_mem
+
+    store.save_paper(disk)
+
+
 # ============================================================================
 # Phase 1 — planning
 # ============================================================================
@@ -72,7 +124,7 @@ async def run_planning(paper: Paper, store: FileStore, llm: LLMClient) -> None:
 
     paper.run_state = RunState.planning
     paper.pricing_snapshot = pricing_snapshot()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     bus.emit(paper.paper_id, "planning.started", {})
 
     headings, page_count = extract_outline(pdf_bytes)
@@ -89,7 +141,7 @@ async def run_planning(paper: Paper, store: FileStore, llm: LLMClient) -> None:
     paper.segments = segments
     paper.run_state = RunState.running
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
 
     bus.emit(paper.paper_id, "outline.ready", {
         "page_count": page_count,
@@ -111,7 +163,11 @@ async def run_segments(
     vision: VisionClient,
     stop_event: asyncio.Event,
 ) -> None:
+    paper_id = paper.paper_id
     while True:
+        # Reload between iterations so concurrent route mutations (skip /
+        # include) are honored without clobbering work just saved.
+        paper = store.load_paper(paper_id) or paper
         if stop_event.is_set():
             _mark_stopped(paper, store)
             return
@@ -125,8 +181,8 @@ async def run_segments(
             seg.status = SegmentStatus.failed
             seg.finished_at = _now()
             paper.updated_at = _now()
-            store.save_paper(paper)
-            bus.emit(paper.paper_id, "segment.failed", {
+            _save_merging_other_segments(store, paper)
+            bus.emit(paper_id, "segment.failed", {
                 "segment_id": seg.segment_id,
                 "error_code": _classify_error(exc),
                 "message": str(exc),
@@ -134,6 +190,7 @@ async def run_segments(
             })
         _emit_cost_updated(paper)
 
+    paper = store.load_paper(paper_id) or paper
     if stop_event.is_set():
         _mark_stopped(paper, store)
         return
@@ -143,8 +200,8 @@ async def run_segments(
     paper.step = PipelineStep.ready
     paper.step_index = 3
     paper.updated_at = _now()
-    store.save_paper(paper)
-    bus.emit(paper.paper_id, "run.completed", {
+    _save_merging_other_segments(store, paper)
+    bus.emit(paper_id, "run.completed", {
         "total_raw_usd": round(paper.total_cost_raw(), 4),
         "total_billed_usd": bill_user(paper.total_cost_raw()),
     })
@@ -161,7 +218,7 @@ async def _process_segment(
     seg.started_at = _now()
     seg.status = SegmentStatus.parsing
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     page_span = seg.page_end - seg.page_start + 1
     # Empirical rate on g6.xlarge from the fixture: ~34s/page. Frontend uses
     # this to interpolate a page-level playhead during parse (MinerU doesn't
@@ -207,7 +264,7 @@ async def _process_segment(
         paper.title = extract_title_from(paper.page_map, paper.markdown)
 
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     bus.emit(paper.paper_id, "segment.parsed", {
         "segment_id": seg.segment_id,
         "mineru_seconds": round(elapsed, 2),
@@ -218,7 +275,7 @@ async def _process_segment(
         seg.status = SegmentStatus.done
         seg.finished_at = _now()
         paper.updated_at = _now()
-        store.save_paper(paper)
+        _save_merging_other_segments(store, paper)
         bus.emit(paper.paper_id, "segment.completed", {
             "segment_id": seg.segment_id,
             "cost_subtotal_raw_usd": seg.cost_subtotal_usd(),
@@ -229,7 +286,7 @@ async def _process_segment(
 
     # -- extract ---------------------------------------------------------
     seg.status = SegmentStatus.extracting
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
 
     cost_before = usage_tracker.cost_usd
     new_blocks = await extract_proofs_from_markdown(seg_md, seg_pm, llm)
@@ -240,7 +297,7 @@ async def _process_segment(
         seg.proof_block_ids.append(b.proof_block_id)
     seg.llm_cost_usd += usage_tracker.cost_usd - cost_before
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     bus.emit(paper.paper_id, "segment.extracted", {
         "segment_id": seg.segment_id,
         "proof_blocks_count": len(new_blocks),
@@ -248,7 +305,7 @@ async def _process_segment(
 
     # -- verify ----------------------------------------------------------
     seg.status = SegmentStatus.verifying
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     for block in new_blocks:
         cost_before = usage_tracker.cost_usd
         findings = await verify_block_against_context(block, paper.markdown, llm)
@@ -261,11 +318,11 @@ async def _process_segment(
                 "finding": f.model_dump(mode="json"),
             })
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
 
     # -- localize (batched per page) ------------------------------------
     seg.status = SegmentStatus.localizing
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
 
     findings_list = [paper.finding(fid) for fid in seg.finding_ids]
     pending = [
@@ -290,7 +347,7 @@ async def _process_segment(
     seg.status = SegmentStatus.done
     seg.finished_at = _now()
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     bus.emit(paper.paper_id, "segment.completed", {
         "segment_id": seg.segment_id,
         "cost_subtotal_raw_usd": seg.cost_subtotal_usd(),
@@ -344,7 +401,7 @@ def _emit_cost_updated(paper: Paper) -> None:
 def _mark_stopped(paper: Paper, store: FileStore) -> None:
     paper.run_state = RunState.stopped
     paper.updated_at = _now()
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     bus.emit(paper.paper_id, "run.stopped", {"reason": "user"})
 
 
@@ -392,7 +449,7 @@ async def run_full_pipeline(
         return
 
     paper.run_state = RunState.running
-    store.save_paper(paper)
+    _save_merging_other_segments(store, paper)
     bus.emit(paper.paper_id, "run.started", {})
 
     await run_segments(paper, store, llm, mineru, vision, stop_event)

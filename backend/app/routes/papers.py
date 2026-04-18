@@ -201,10 +201,16 @@ def stop_run(paper_id: str, orch: Orchestrator = Depends(_orch)):
 
 
 @router.post("/{paper_id}/resume", response_model=Paper)
-def resume_run(paper_id: str, orch: Orchestrator = Depends(_orch)):
+def resume_run(
+    paper_id: str,
+    background: BackgroundTasks,
+    orch: Orchestrator = Depends(_orch),
+):
     result = orch.resume(paper_id)
     if result is None:
         raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    # Kick the scheduler off the ASGI event loop.
+    background.add_task(orch.run_pipeline_task, paper_id)
     return result
 
 
