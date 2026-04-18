@@ -8,11 +8,13 @@ import { FileText, Github, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LoupeLockup } from "@/components/brand/loupe-mark";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
+import { useGlossary } from "@/lib/hooks/use-glossary";
 
 const nav = [{ href: "/papers", label: "Papers", icon: FileText }];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const openGlossary = useGlossary((s) => s.openAt);
   return (
     <aside className="flex h-screen w-[260px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="flex items-center px-5 pt-7 pb-6">
@@ -62,14 +64,13 @@ export function Sidebar() {
             >
               <Github className="size-3.5" /> GitHub
             </Link>
-            <Link
-              href="https://github.com/morphmind/loupe#readme"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              onClick={() => openGlossary()}
               className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              aria-label="Open glossary"
             >
-              <BookOpen className="size-3.5" /> Docs
-            </Link>
+              <BookOpen className="size-3.5" /> Glossary
+            </button>
           </div>
           <ThemeToggle />
         </div>

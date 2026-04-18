@@ -35,3 +35,9 @@ export const SEVERITY_META: Record<
     text: "text-severity-low",
   },
 };
+
+export const SEVERITY_DESCRIPTIONS: Record<Severity, string> = {
+  high: "A substantive error that would block publication. Flipped inequality, wrong constant, or an unstated assumption that is load-bearing for the result.",
+  medium: "Worth a careful look — likely correctable without changing the main claim. Missing proof step, ambiguous quantifier, or an assumption that should be stated.",
+  low: "Minor issue with exposition or citation. Does not affect correctness; author should still address for clarity.",
+};

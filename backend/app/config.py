@@ -22,9 +22,11 @@ class Settings(BaseSettings):
     # LLM providers
     anthropic_api_key: str = ""
 
-    # Models — Sonnet for text, Opus for vision
+    # Models — Sonnet for text AND vision by default (cheap enough to stay
+    # under the $0.30/paper target). Override vision_model to claude-opus-4-7
+    # via env var if bbox precision ever regresses in practice.
     text_model: str = "claude-sonnet-4-6"
-    vision_model: str = "claude-opus-4-7"
+    vision_model: str = "claude-sonnet-4-6"
 
     # Data
     data_dir: str = "./data"
@@ -37,6 +39,12 @@ class Settings(BaseSettings):
 
     # Visual localize concurrency
     localize_concurrency: int = 3
+
+    # Web_search tool inside verify_proofs. Off by default — search results
+    # bring back ~5–10K extra input tokens per call, easily 3–5× the
+    # verify cost. Flip to true per-paper when a paper has many
+    # named-result citations that warrant external verification.
+    verify_enable_web_search: bool = False
 
 
 settings = Settings()

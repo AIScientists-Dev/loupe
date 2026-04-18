@@ -20,7 +20,7 @@ from app.models import (
     ReviewDraft,
 )
 from app.pipeline.runner import run_pipeline
-from app.pipeline.steps.localize import localize_finding
+from app.pipeline.steps.localize import localize_findings_on_page
 from app.services.events import bus
 from app.services.llm_client import LLMClient
 from app.services.mineru_client import MinerUClient
@@ -95,6 +95,7 @@ class Orchestrator:
     # -- localize -------------------------------------------------------------
 
     async def localize_one(self, paper_id: str, finding_id: str) -> Optional[Finding]:
+        """Single-finding localize — calls the batched vision with N=1."""
         async with self._lock(paper_id):
             paper = self.store.load_paper(paper_id)
             if not paper:
@@ -102,7 +103,7 @@ class Orchestrator:
             finding = paper.finding(finding_id)
             if not finding:
                 return None
-            await localize_finding(paper, finding, self.store, self.vision)
+            await localize_findings_on_page(paper, [finding], self.store, self.vision)
             paper.updated_at = _now()
             self.store.save_paper(paper)
             bus.emit(paper_id, "localize.completed", {
@@ -112,28 +113,46 @@ class Orchestrator:
             return finding
 
     async def localize_all(self, paper_id: str) -> None:
-        """Fan out localize across all pending findings with bounded concurrency."""
+        """Group pending findings by page → one batched vision call per page."""
         paper = self.store.load_paper(paper_id)
         if not paper:
             return
-        pending_ids = [
-            f.finding_id
-            for f in paper.findings
-            if f.localize_status == LocalizeStatus.pending and not f.soft_deleted
-        ]
-        if not pending_ids:
+
+        by_page: dict[int, list] = {}
+        for f in paper.findings:
+            if f.localize_status == LocalizeStatus.pending and not f.soft_deleted:
+                by_page.setdefault(f.page, []).append(f)
+        if not by_page:
             return
 
         sem = asyncio.Semaphore(max(1, settings.localize_concurrency))
 
-        async def _one(fid: str) -> None:
+        async def _one_page(page_number: int, finding_ids: list[str]) -> None:
             async with sem:
                 try:
-                    await self.localize_one(paper_id, fid)
+                    async with self._lock(paper_id):
+                        p = self.store.load_paper(paper_id)
+                        if not p:
+                            return
+                        findings = [p.finding(fid) for fid in finding_ids]
+                        findings = [f for f in findings if f is not None]
+                        if not findings:
+                            return
+                        await localize_findings_on_page(p, findings, self.store, self.vision)
+                        p.updated_at = _now()
+                        self.store.save_paper(p)
+                    for f in findings:
+                        bus.emit(paper_id, "localize.completed", {
+                            "finding_id": f.finding_id,
+                            "localize_status": f.localize_status.value,
+                        })
                 except Exception:
-                    logger.exception("localize_all: finding %s failed", fid)
+                    logger.exception("localize_all: page %d failed", page_number)
 
-        await asyncio.gather(*(_one(fid) for fid in pending_ids))
+        await asyncio.gather(*(
+            _one_page(page, [f.finding_id for f in fs])
+            for page, fs in by_page.items()
+        ))
 
         # Signal fan-out done.
         bus.emit(paper_id, "pipeline.done", {"status": "ready", "phase": "localize"})
@@ -297,6 +316,7 @@ async def _investigate_llm(llm: LLMClient, paper: Paper, f: Finding, block: Opti
         system=_INVESTIGATE_SYSTEM,
         temperature=0.2,
         max_tokens=1500,
+        tag="investigate",
     )
 
 
@@ -349,6 +369,7 @@ async def _generate_review_llm(llm: LLMClient, paper: Paper) -> str:
         system=_REVIEW_SYSTEM,
         temperature=0.3,
         max_tokens=2500,
+        tag="review",
     )
 
 

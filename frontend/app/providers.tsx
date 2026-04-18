@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { MswBoot } from "@/components/shell/msw-boot";
+import { GlossarySheet } from "@/components/glossary/glossary-sheet";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = React.useState(
@@ -33,6 +34,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <MswBoot>
           <TooltipProvider delayDuration={200}>
             {children}
+            <GlossarySheet />
             <Toaster />
           </TooltipProvider>
         </MswBoot>

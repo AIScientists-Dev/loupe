@@ -12,7 +12,7 @@ async function start() {
   started = true;
   const { worker } = await import("@/mocks/browser");
   await worker.start({
-    onUnhandledRequest: "bypass",
+    onUnhandledRequest: "warn",
     serviceWorker: { url: "/mockServiceWorker.js" },
   });
 

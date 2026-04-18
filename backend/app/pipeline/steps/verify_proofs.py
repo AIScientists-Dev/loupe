@@ -81,24 +81,39 @@ async def run_verify_proofs(paper: Paper, llm: LLMClient, event_bus=None) -> Non
 async def _verify_block(paper: Paper, block: ProofBlock, llm: LLMClient) -> List[Finding]:
     block_text = _render_block(block)
     context = _render_context(paper, block)
-    prompt = f"""PAPER CONTEXT (assumptions, definitions, other declarations from the full paper):
 
-{context}
+    # Structured user message with cache_control on the paper context.
+    # The first call for this paper writes the cache; subsequent calls for
+    # other proof blocks hit it and pay ~10% of the input-token rate on the
+    # shared markdown chunk.
+    content_blocks = [
+        {
+            "type": "text",
+            "text": (
+                "PAPER CONTEXT (assumptions, definitions, other declarations from the full paper):\n\n"
+                f"{context}"
+            ),
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": (
+                f"\n\nPROOF BLOCK UNDER REVIEW ({block.kind.value}, {block.label or 'unlabeled'}):\n\n"
+                f"{block_text}\n\nReview this proof block for technical errors. Return the JSON array."
+            ),
+        },
+    ]
 
-PROOF BLOCK UNDER REVIEW ({block.kind.value}, {block.label or 'unlabeled'}):
-
-{block_text}
-
-Review this proof block for technical errors. Return the JSON array."""
-
+    tools = [WEB_SEARCH_TOOL] if settings.verify_enable_web_search else None
     try:
         raw = await llm.complete_json(
             model=settings.text_model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": content_blocks}],
             system=_SYSTEM,
             temperature=0.0,
-            max_tokens=4096,
-            tools=[WEB_SEARCH_TOOL],
+            max_tokens=2048,
+            tools=tools,
+            tag="verify_proofs",
         )
     except Exception:
         logger.exception("verify_proofs: LLM call failed on block %s", block.proof_block_id)

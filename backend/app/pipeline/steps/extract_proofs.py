@@ -50,6 +50,7 @@ async def run_extract_proofs(paper: Paper, llm: LLMClient, bus=None) -> None:
             system=_SYSTEM,
             temperature=0.0,
             max_tokens=8192,
+            tag="extract_proofs",
         )
     except Exception as exc:
         logger.exception("extract_proofs: LLM call failed for %s", paper.paper_id)

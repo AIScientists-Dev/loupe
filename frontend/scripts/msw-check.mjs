@@ -4,8 +4,15 @@ const ctx = await browser.newContext();
 const page = await ctx.newPage();
 page.on("console", (msg) => {
   const t = msg.text();
-  if (t.includes("MSW") || t.includes("[loupe") || t.includes("Mock"))
-    console.log(`LOG: ${t}`);
+  if (
+    t.includes("MSW") ||
+    t.includes("[loupe") ||
+    t.includes("Mock") ||
+    t.includes("warning") ||
+    t.includes("Warning") ||
+    msg.type() === "warning"
+  )
+    console.log(`${msg.type()}: ${t.slice(0, 200)}`);
 });
 page.on("response", (r) => {
   if (r.url().includes("/api/v1/papers")) {

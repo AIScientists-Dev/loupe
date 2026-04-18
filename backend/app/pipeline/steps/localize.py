@@ -1,19 +1,18 @@
-"""Localize step — per-finding visual verification + refined bbox.
+"""Localize step — per-page batch verification + refined bbox.
 
-Called on-demand (POST .../findings/{fid}/localize) and as auto-fanout after
-verify_proofs completes. Uses PyMuPDF to render the single relevant page,
-then asks Claude vision to verify the quote and return a normalized bbox.
+Claude sees each page image ONCE and adjudicates all findings that live on
+that page in a single request. This is the main cost lever (16 per-finding
+Opus calls → 2 per-page Sonnet calls on the fixture).
 
-Side effects on the finding:
+Side effects per finding:
   - verified → localize_status=done, bbox=refined rectangle (PDF points), visually_verified=True
   - not verified (parser munged) → localize_status=dropped, soft_deleted=True
-  - transport error → localize_status stays pending (caller can retry)
+  - transport / API error → localize_status stays pending (caller can retry)
 """
 from __future__ import annotations
 
-import io
 import logging
-from typing import Optional
+from typing import List
 
 from app.models import BoundingBox, Finding, LocalizeStatus, Paper
 from app.services.storage import FileStore
@@ -22,58 +21,78 @@ from app.services.vision_client import VisionClient
 logger = logging.getLogger(__name__)
 
 
-RENDER_DPI = 150  # good clarity vs. payload size
+RENDER_DPI = 150  # good clarity vs. payload size; Sonnet handles this fine
 
 
-async def localize_finding(
+async def localize_findings_on_page(
     paper: Paper,
-    finding: Finding,
+    findings: List[Finding],
     store: FileStore,
     vision: VisionClient,
-) -> Finding:
-    """Run visual localize on a single finding. Mutates the finding in-place."""
+) -> None:
+    """Run one batched vision call for all `findings`. All must share a page."""
+    if not findings:
+        return
+
+    page_number = findings[0].page
+    for f in findings:
+        if f.page != page_number:
+            raise ValueError("localize_findings_on_page: mixed pages in batch")
+
     pdf_bytes = store.load_pdf(paper.paper_id)
     if not pdf_bytes:
         logger.warning("localize: pdf missing for paper %s", paper.paper_id)
-        return finding
+        return
 
     try:
-        page_png, page_width_pts, page_height_pts = _render_page_png(pdf_bytes, finding.page)
-    except Exception as exc:
-        logger.exception("localize: could not render page %d for paper %s", finding.page, paper.paper_id)
-        return finding  # leave as pending; caller may retry
+        page_png, page_w_pts, page_h_pts = _render_page_png(pdf_bytes, page_number)
+    except Exception:
+        logger.exception("localize: could not render page %d for paper %s", page_number, paper.paper_id)
+        return
+
+    items = [
+        {
+            "id": f.finding_id,
+            "evidence_quote": f.evidence_quote,
+            "description": f.description,
+        }
+        for f in findings
+    ]
 
     try:
-        result = await vision.localize(page_png, finding.evidence_quote, finding.description)
-    except Exception as exc:
-        logger.exception("localize: vision call failed for finding %s", finding.finding_id)
-        return finding  # leave pending
+        results = await vision.localize_batch(page_png, items)
+    except Exception:
+        logger.exception("localize: vision batch failed for page %d", page_number)
+        return
 
-    verified = result.get("verified", False)
-    bbox_norm = result.get("bbox_norm")
-    dropped_reason = result.get("dropped_reason")
+    for f in findings:
+        r = results.get(f.finding_id) or {
+            "verified": False, "bbox_norm": None, "dropped_reason": "no result returned",
+        }
+        _apply_result(f, r, page_w_pts, page_h_pts)
+
+
+def _apply_result(f: Finding, r: dict, page_w: float, page_h: float) -> None:
+    verified = r.get("verified", False)
+    bbox_norm = r.get("bbox_norm")
+    dropped_reason = r.get("dropped_reason")
 
     if verified and bbox_norm:
-        finding.bbox = BoundingBox(
-            page=finding.page,
-            x=bbox_norm["x0"] * page_width_pts,
-            y=bbox_norm["y0"] * page_height_pts,
-            width=max((bbox_norm["x1"] - bbox_norm["x0"]) * page_width_pts, 1.0),
-            height=max((bbox_norm["y1"] - bbox_norm["y0"]) * page_height_pts, 1.0),
+        f.bbox = BoundingBox(
+            page=f.page,
+            x=bbox_norm["x0"] * page_w,
+            y=bbox_norm["y0"] * page_h,
+            width=max((bbox_norm["x1"] - bbox_norm["x0"]) * page_w, 1.0),
+            height=max((bbox_norm["y1"] - bbox_norm["y0"]) * page_h, 1.0),
         )
-        finding.visually_verified = True
-        finding.localize_status = LocalizeStatus.done
-        logger.info("localize: finding %s → verified, bbox refined", finding.finding_id)
+        f.visually_verified = True
+        f.localize_status = LocalizeStatus.done
+        logger.info("localize: finding %s → verified", f.finding_id)
     else:
-        finding.visually_verified = False
-        finding.localize_status = LocalizeStatus.dropped
-        finding.soft_deleted = True
-        logger.info(
-            "localize: finding %s → DROPPED (%s)",
-            finding.finding_id, dropped_reason or "unknown",
-        )
-
-    return finding
+        f.visually_verified = False
+        f.localize_status = LocalizeStatus.dropped
+        f.soft_deleted = True
+        logger.info("localize: finding %s → DROPPED (%s)", f.finding_id, dropped_reason or "unknown")
 
 
 def _render_page_png(pdf_bytes: bytes, page_number_1based: int) -> tuple[bytes, float, float]:

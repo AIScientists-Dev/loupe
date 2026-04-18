@@ -22,11 +22,88 @@ _MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2"
 _ROUTING: Dict[str, tuple] = {
     "claude-sonnet-4-6": (_ANTHROPIC_URL, "anthropic"),
     "claude-opus-4-6": (_ANTHROPIC_URL, "anthropic"),
+    "claude-opus-4-7": (_ANTHROPIC_URL, "anthropic"),
     "gpt-4.1": (_OPENAI_URL, "openai"),
     "deepseek-v3": (_DEEPSEEK_URL, "openai"),
     "kimi-k2.5": (_MOONSHOT_URL, "openai"),
     "minimax-m2.7": (_MINIMAX_URL, "openai"),
 }
+
+# Per-MTok USD prices: (input, cached_read, output).
+# Used only for observability — logged, not enforced.
+_PRICES: Dict[str, tuple] = {
+    "claude-sonnet-4-6": (3.0, 0.30, 15.0),
+    "claude-opus-4-6":   (15.0, 1.50, 75.0),
+    "claude-opus-4-7":   (15.0, 1.50, 75.0),
+}
+
+
+class _UsageTracker:
+    """Process-wide accumulator for token usage + estimated cost (USD)."""
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.calls = 0
+        self.input_tokens = 0
+        self.cache_read_tokens = 0
+        self.cache_write_tokens = 0
+        self.output_tokens = 0
+        self.cost_usd = 0.0
+        self.by_tag: Dict[str, Dict[str, float]] = {}
+
+    def record(
+        self,
+        model: str,
+        usage: Dict[str, Any],
+        tag: str = "",
+    ) -> Dict[str, Any]:
+        in_t = int(usage.get("input_tokens", 0) or 0)
+        cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
+        cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+        out_t = int(usage.get("output_tokens", 0) or 0)
+
+        price_in, price_cached, price_out = _PRICES.get(model, (0.0, 0.0, 0.0))
+        cost = (
+            in_t * price_in / 1_000_000
+            + cache_write * price_in * 1.25 / 1_000_000     # cache-write surcharge
+            + cache_read * price_cached / 1_000_000
+            + out_t * price_out / 1_000_000
+        )
+
+        self.calls += 1
+        self.input_tokens += in_t + cache_write
+        self.cache_read_tokens += cache_read
+        self.cache_write_tokens += cache_write
+        self.output_tokens += out_t
+        self.cost_usd += cost
+
+        bucket = self.by_tag.setdefault(tag or "untagged", {"calls": 0, "input": 0, "cache_read": 0, "output": 0, "cost": 0.0})
+        bucket["calls"] += 1
+        bucket["input"] += in_t + cache_write
+        bucket["cache_read"] += cache_read
+        bucket["output"] += out_t
+        bucket["cost"] += cost
+
+        logger.info(
+            "llm_usage tag=%s model=%s in=%d cached_write=%d cached_read=%d out=%d cost=$%.4f",
+            tag or "-", model, in_t, cache_write, cache_read, out_t, cost,
+        )
+        return {"input": in_t, "cache_write": cache_write, "cache_read": cache_read, "output": out_t, "cost_usd": cost}
+
+    def summary(self) -> Dict[str, Any]:
+        return {
+            "calls": self.calls,
+            "input_tokens": self.input_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "output_tokens": self.output_tokens,
+            "cost_usd": round(self.cost_usd, 4),
+            "by_tag": {k: {**v, "cost": round(v["cost"], 4)} for k, v in self.by_tag.items()},
+        }
+
+
+usage_tracker = _UsageTracker()
 
 
 def _api_key_for(model: str) -> str:
@@ -50,10 +127,11 @@ class LLMClient:
         self,
         model: str,
         messages: List[Dict[str, Any]],
-        system: Optional[str] = None,
-        temperature: float = 0.3,
+        system: Optional[Any] = None,
+        temperature: Optional[float] = 0.3,
         max_tokens: int = 4096,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tag: str = "",
     ) -> str:
         route = _ROUTING.get(model)
         if not route:
@@ -81,6 +159,7 @@ class LLMClient:
             data = resp.json()
 
         if fmt == "anthropic":
+            usage_tracker.record(model, data.get("usage", {}) or {}, tag=tag)
             return self._parse_anthropic(data)
         return self._parse_openai(data)
 
@@ -90,8 +169,8 @@ class LLMClient:
     def _anthropic_payload(
         model: str,
         messages: List[Dict[str, Any]],
-        system: Optional[str],
-        temperature: float,
+        system: Optional[Any],
+        temperature: Optional[float],
         max_tokens: int,
         api_key: str,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -104,10 +183,15 @@ class LLMClient:
         body: Dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": messages,
         }
+        # Opus 4.7 rejects temperature; pass only when caller provided it AND
+        # the model supports it.
+        if temperature is not None and not model.startswith("claude-opus-4-7"):
+            body["temperature"] = temperature
         if system:
+            # system may be a plain string or a list of content blocks
+            # (list form allows cache_control annotations).
             body["system"] = system
         if tools:
             body["tools"] = tools
@@ -176,17 +260,18 @@ class LLMClient:
         self,
         model: str,
         messages: List[Dict[str, Any]],
-        system: Optional[str] = None,
-        temperature: float = 0.2,
+        system: Optional[Any] = None,
+        temperature: Optional[float] = 0.2,
         max_tokens: int = 8192,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tag: str = "",
     ) -> Any:
         """Call complete() and parse the response as JSON.
 
         Tolerates: markdown code fences, leading/trailing prose, ``json`` tags.
         Extracts the first balanced JSON value (object or array) if direct parse fails.
         """
-        raw = await self.complete(model, messages, system, temperature, max_tokens, tools=tools)
+        raw = await self.complete(model, messages, system, temperature, max_tokens, tools=tools, tag=tag)
         text = raw.strip()
 
         # Strip markdown code fences.

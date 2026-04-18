@@ -13,12 +13,14 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useHotkeys } from "@/lib/hooks/use-hotkeys";
+import { useGlossary } from "@/lib/hooks/use-glossary";
+import { InfoTrigger } from "@/components/glossary/info-trigger";
 import { FindingCard } from "./finding-card";
 import { ShortcutsHelpDialog, Kbd } from "./shortcuts-help";
 import type { Finding } from "@/lib/types";
 
 type FilterKey = "open" | "agreed" | "dismissed";
-type SortKey = "severity" | "page" | "confidence";
+type SortKey = "severity" | "page";
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
 
@@ -44,6 +46,7 @@ export function FindingPanel({
   const [showDismissed, setShowDismissed] = React.useState(false);
   const [helpOpen, setHelpOpen] = React.useState(false);
   const [command, setCommand] = React.useState<Command | null>(null);
+  const openGlossary = useGlossary((s) => s.openAt);
 
   const counts = React.useMemo(() => {
     const c = { open: 0, agreed: 0, dismissed: 0 };
@@ -69,7 +72,6 @@ export function FindingPanel({
       if (sort === "severity")
         return SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
       if (sort === "page") return (a.bbox_page ?? 0) - (b.bbox_page ?? 0);
-      if (sort === "confidence") return b.confidence - a.confidence;
       return 0;
     });
     return list;
@@ -149,24 +151,38 @@ export function FindingPanel({
         setHelpOpen((v) => !v);
       },
     },
+    {
+      keys: ["h"],
+      handler: (e) => {
+        e.preventDefault();
+        openGlossary();
+      },
+    },
   ]);
 
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-background">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
-          <TabsList>
-            <TabsTrigger value="open">
-              Open <CountPill n={counts.open} />
-            </TabsTrigger>
-            <TabsTrigger value="agreed">
-              Agreed <CountPill n={counts.agreed} />
-            </TabsTrigger>
-            <TabsTrigger value="dismissed">
-              Dismissed <CountPill n={counts.dismissed} />
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="flex items-center gap-1.5">
+          <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
+            <TabsList>
+              <TabsTrigger value="open">
+                Open <CountPill n={counts.open} />
+              </TabsTrigger>
+              <TabsTrigger value="agreed">
+                Agreed <CountPill n={counts.agreed} />
+              </TabsTrigger>
+              <TabsTrigger value="dismissed">
+                Dismissed <CountPill n={counts.dismissed} />
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <InfoTrigger
+            section="decisions"
+            label="About decisions"
+            size={12}
+          />
+        </div>
 
         <div className="flex items-center gap-1">
           <SortDropdown value={sort} onChange={setSort} />
@@ -288,9 +304,8 @@ function SortDropdown({
   const labels: Record<SortKey, string> = {
     severity: "Severity",
     page: "Page",
-    confidence: "Confidence",
   };
-  const keys: SortKey[] = ["severity", "page", "confidence"];
+  const keys: SortKey[] = ["severity", "page"];
   const next = keys[(keys.indexOf(value) + 1) % keys.length];
   return (
     <Button

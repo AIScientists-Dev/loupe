@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { InfoTrigger } from "@/components/glossary/info-trigger";
 import type { Paper } from "@/lib/types";
 
 const MARKDOWN_COMPONENTS = {
@@ -95,7 +96,14 @@ export function DraftReviewDialog({
       <DialogContent className="max-h-[90vh] w-[min(1100px,95vw)] sm:max-w-none">
         <DialogHeader className="flex-row items-start justify-between gap-4">
           <div>
-            <DialogTitle className="text-lg">Draft review</DialogTitle>
+            <DialogTitle className="inline-flex items-center gap-1.5 text-lg">
+              Draft review
+              <InfoTrigger
+                section="review"
+                label="About draft reviews"
+                size={13}
+              />
+            </DialogTitle>
             <DialogDescription className="mt-1 text-xs">
               Auto-composed from your {paper.findings.length} findings. Edit the
               markdown on the left; the preview updates live. Copy or download

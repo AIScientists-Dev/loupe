@@ -5,6 +5,7 @@ import { Check, Loader2, CircleDashed, AlertCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { InfoTrigger } from "@/components/glossary/info-trigger";
 import type { PaperStatusResponse } from "@/lib/types";
 
 type StepDef = { key: "parse" | "extract_proofs" | "verify_proofs"; label: string; detail: string };
@@ -33,8 +34,16 @@ export function AnalysisProgress({
     <div className="mx-auto grid w-full max-w-2xl place-items-center px-8">
       <div className="flex w-full flex-col items-center gap-10 py-12">
         <div className="text-center">
-          <h2 className="text-2xl font-semibold tracking-tight">
+          <h2 className="inline-flex items-center gap-1.5 text-2xl font-semibold tracking-tight">
             {failed ? "Analysis failed" : "Analyzing your paper"}
+            {!failed && (
+              <InfoTrigger
+                section="pipeline"
+                label="About the analysis pipeline"
+                size={14}
+                className="self-end"
+              />
+            )}
           </h2>
           <p className="mt-2 text-sm text-muted-foreground">
             {failed

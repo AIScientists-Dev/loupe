@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { Formula, MathText } from "./math";
 import { ISSUE_META, SEVERITY_META } from "./issue-type";
 import { IssueIcon } from "./issue-icon";
+import { InfoTrigger } from "@/components/glossary/info-trigger";
 import type { Finding } from "@/lib/types";
 
 export type FindingCardProps = {
@@ -97,20 +98,31 @@ export function FindingCard(props: FindingCardProps) {
           <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
             <span
               className={cn(
-                "rounded-full border px-2 py-0.5 font-medium uppercase tracking-wide",
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium uppercase tracking-wide",
                 sev.chip
               )}
             >
               {sev.label}
+              <InfoTrigger
+                section="severity"
+                term={finding.severity}
+                label={`About ${sev.label} severity`}
+                size={11}
+                className="opacity-70 hover:opacity-100"
+              />
             </span>
-            <span className="text-muted-foreground">{meta.short}</span>
+            <span className="inline-flex items-center gap-1 text-muted-foreground">
+              {meta.short}
+              <InfoTrigger
+                section="issue-types"
+                term={finding.issue_type}
+                label={`About ${meta.label}`}
+                size={11}
+              />
+            </span>
             <span className="text-muted-foreground">·</span>
             <span className="text-muted-foreground">
               p.{finding.bbox_page ?? "?"}
-            </span>
-            <span className="text-muted-foreground">·</span>
-            <span className="text-muted-foreground">
-              {Math.round(finding.confidence * 100)}% confidence
             </span>
             <LocalizeBadge status={finding.localize_status} />
           </div>
