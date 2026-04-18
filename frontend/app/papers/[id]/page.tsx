@@ -3,20 +3,25 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { AnalysisProgress } from "@/components/workspace/analysis-progress";
 import { Workspace } from "@/components/workspace/workspace";
+import { StatusBanner } from "@/components/workspace/status-banner";
+import { RunControls } from "@/components/workspace/run-controls";
+import { CostChip } from "@/components/workspace/cost-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/papers/status-badge";
 import {
   useDeletePaper,
   usePaper,
   usePaperStatus,
+  useResumePaper,
+  useStopPaper,
 } from "@/lib/hooks/use-papers";
 import { useAnalysisStream } from "@/lib/hooks/use-analysis-stream";
+import { useHotkeys } from "@/lib/hooks/use-hotkeys";
+import { useCostDrawer } from "@/lib/hooks/use-cost-drawer";
 
 export default function WorkspacePage({
   params,
@@ -29,9 +34,46 @@ export default function WorkspacePage({
   const isAnalyzing =
     !!paper && paper.status !== "ready" && paper.status !== "failed";
   const statusQuery = usePaperStatus(params.id, isAnalyzing);
-  // SSE drives real-time progress + finding injection; polling above is the fallback.
   useAnalysisStream(params.id, isAnalyzing);
   const deletePaper = useDeletePaper();
+  const stop = useStopPaper();
+  const resume = useResumePaper();
+  const toggleCostDrawer = useCostDrawer((s) => s.toggle);
+
+  // Workspace-level hotkeys. 's' toggles Stop/Resume based on current run state.
+  useHotkeys(
+    [
+      {
+        keys: ["s"],
+        handler: async (e) => {
+          if (!paper) return;
+          e.preventDefault();
+          if (paper.run_state === "running") {
+            try {
+              await stop.mutateAsync(paper.id);
+              toast.success("Analysis stopped");
+            } catch {}
+          } else if (
+            paper.run_state === "stopped" ||
+            paper.run_state === "paused"
+          ) {
+            try {
+              await resume.mutateAsync(paper.id);
+              toast.success("Analysis resumed");
+            } catch {}
+          }
+        },
+      },
+      {
+        keys: ["c"],
+        handler: (e) => {
+          e.preventDefault();
+          toggleCostDrawer();
+        },
+      },
+    ],
+    !!paper
+  );
 
   const polledStatus = statusQuery.data?.status;
   React.useEffect(() => {
@@ -40,6 +82,8 @@ export default function WorkspacePage({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polledStatus]);
+
+  const hasOutline = !!paper?.segments && paper.segments.length > 0;
 
   return (
     <div className="flex h-screen flex-col">
@@ -61,8 +105,10 @@ export default function WorkspacePage({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          {paper && <StatusBadge status={paper.status} />}
+        <div className="flex items-center gap-2">
+          {paper && <StatusBanner paper={paper} />}
+          {paper && <RunControls paper={paper} />}
+          {paper && <CostChip paper={paper} />}
           {paper && (
             <Button
               variant="ghost"
@@ -92,24 +138,10 @@ export default function WorkspacePage({
           <LoadingState />
         ) : !paper ? (
           <NotFoundState />
-        ) : paper.status === "ready" ? (
-          <Workspace paper={paper} />
+        ) : !hasOutline && paper.run_state === "running" ? (
+          <PreOutlineSplash />
         ) : (
-          <div className="grid flex-1 place-items-center">
-            <AnalysisProgress
-              status={
-                statusQuery.data ?? {
-                  status: paper.status,
-                  step: "parse",
-                  step_index: 0,
-                  total_steps: 3,
-                  finding_count: 0,
-                  localize_pending: 0,
-                }
-              }
-              onRetry={() => router.refresh()}
-            />
-          </div>
+          <Workspace paper={paper} />
         )}
       </section>
     </div>
@@ -142,6 +174,18 @@ function NotFoundState() {
         <Button variant="outline" className="mt-4" asChild>
           <Link href="/papers">Back to papers</Link>
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function PreOutlineSplash() {
+  return (
+    <div className="grid flex-1 place-items-center">
+      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+        <Loader2 className="size-5 animate-spin text-primary" />
+        <p className="text-sm">Reading outline…</p>
+        <p className="text-[11px]">Usually takes ~2 seconds.</p>
       </div>
     </div>
   );

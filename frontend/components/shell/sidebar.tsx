@@ -8,6 +8,7 @@ import { FileText, Github, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LoupeLockup } from "@/components/brand/loupe-mark";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
+import { UserChip } from "@/components/shell/user-chip";
 import { useGlossary } from "@/lib/hooks/use-glossary";
 
 const nav = [{ href: "/papers", label: "Papers", icon: FileText }];
@@ -53,28 +54,29 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-sidebar-border p-3">
-        <div className="mb-2 flex items-center justify-between gap-1">
+      <div className="border-t border-sidebar-border p-2">
+        <UserChip />
+        <div className="mt-1 flex items-center justify-between gap-1 px-1">
           <div className="flex items-center gap-0.5">
             <Link
               href="https://github.com/morphmind/loupe"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
             >
-              <Github className="size-3.5" /> GitHub
+              <Github className="size-3" /> GitHub
             </Link>
             <button
               onClick={() => openGlossary()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
               aria-label="Open glossary"
             >
-              <BookOpen className="size-3.5" /> Glossary
+              <BookOpen className="size-3" /> Glossary
             </button>
           </div>
           <ThemeToggle />
         </div>
-        <div className="px-1 text-[10px] text-muted-foreground/70">
+        <div className="mt-1 px-1.5 text-[10px] text-muted-foreground/70">
           An open-source agent by MorphMind
         </div>
       </div>

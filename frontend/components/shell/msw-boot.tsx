@@ -16,19 +16,17 @@ async function start() {
     serviceWorker: { url: "/mockServiceWorker.js" },
   });
 
-  // If the service worker registered AFTER page load, this page is still
-  // uncontrolled — fetches bypass MSW. Force one reload so the next page
-  // load comes up under the worker's control. Guarded so it fires at most
-  // once per tab session.
-  if (
-    typeof navigator !== "undefined" &&
-    navigator.serviceWorker &&
-    !navigator.serviceWorker.controller
-  ) {
+  // MSW v2 race: even after worker.start() resolves, the current page may
+  // not yet be controlled by the service worker (clients.claim has a short
+  // propagation delay). Any fetch made in the first few ticks can bypass
+  // the mock and hit the real backend. Force a one-time reload so the
+  // subsequent page load comes up under the worker's control.
+  // Guarded via sessionStorage so it fires at most once per tab session.
+  if (typeof sessionStorage !== "undefined") {
     if (!sessionStorage.getItem(RELOADED_KEY)) {
       sessionStorage.setItem(RELOADED_KEY, "1");
       window.location.reload();
-      // Never resolve — the reload will take it from here.
+      // Never resolve — the reload takes it from here.
       await new Promise(() => {});
     }
   }

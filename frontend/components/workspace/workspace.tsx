@@ -5,11 +5,16 @@ import { toast } from "sonner";
 
 import { PdfViewer } from "./pdf-viewer";
 import { FindingPanel } from "./finding-panel";
+import { CostDrawer } from "./cost-drawer";
 import { DraftReviewDialog } from "../review/draft-review-dialog";
 import {
   useDecideFinding,
   useInvestigateFinding,
+  usePaperCost,
+  useSkipSegment,
+  useStopPaper,
 } from "@/lib/hooks/use-papers";
+import { useSettings } from "@/lib/hooks/use-settings";
 import type { Paper } from "@/lib/types";
 
 export function Workspace({ paper }: { paper: Paper }) {
@@ -20,13 +25,63 @@ export function Workspace({ paper }: { paper: Paper }) {
 
   const decide = useDecideFinding(paper.id);
   const investigate = useInvestigateFinding(paper.id);
+  const skip = useSkipSegment(paper.id);
+  const stop = useStopPaper();
+  const budgetCap = useSettings((s) => s.defaultBudgetCapUsd);
+  const { data: cost } = usePaperCost(paper.id, true);
+
+  // Budget guardrail: auto-stop if running billed cost exceeds the user's cap.
+  const billed = cost?.running_billed_usd ?? 0;
+  const budgetExceeded =
+    budgetCap > 0 &&
+    billed > budgetCap &&
+    paper.run_state === "running";
+  const budgetToastedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!budgetExceeded || budgetToastedRef.current) return;
+    budgetToastedRef.current = true;
+    (async () => {
+      try {
+        await stop.mutateAsync(paper.id);
+      } catch {}
+      toast.error(
+        `Budget cap of $${budgetCap.toFixed(2)} reached — analysis stopped`,
+        {
+          description:
+            "Raise the cap in Settings, or accept the partial result.",
+          duration: 10_000,
+          action: {
+            label: "Open Settings",
+            onClick: () => {
+              window.location.href = "/settings";
+            },
+          },
+        }
+      );
+    })();
+  }, [budgetExceeded, budgetCap, paper.id, stop]);
+
+  const handleSkip = async (segmentId: string) => {
+    try {
+      await skip.mutateAsync(segmentId);
+      toast.success("Range skipped");
+    } catch (err) {
+      toast.error("Could not skip", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    }
+  };
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(420px,460px)]">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(420px,460px)]">
       <PdfViewer
         paperTitle={paper.title}
         findings={paper.findings}
         selectedFindingId={selectedId}
+        segments={paper.segments}
+        totalPages={paper.total_pages}
+        onSkipSegment={handleSkip}
       />
       <FindingPanel
         findings={paper.findings}
@@ -56,11 +111,13 @@ export function Workspace({ paper }: { paper: Paper }) {
         onGenerateReview={() => setReviewOpen(true)}
       />
 
-      <DraftReviewDialog
-        paper={paper}
-        open={reviewOpen}
-        onOpenChange={setReviewOpen}
-      />
+        <DraftReviewDialog
+          paper={paper}
+          open={reviewOpen}
+          onOpenChange={setReviewOpen}
+        />
+      </div>
+      <CostDrawer paper={paper} />
     </div>
   );
 }

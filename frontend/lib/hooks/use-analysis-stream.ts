@@ -108,6 +108,126 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
     es.addEventListener("localize.completed", onLocalizeCompleted);
     es.addEventListener("pipeline.done", onPipelineDone);
 
+    // Segment-based pipeline additions (M0'+).
+    const patchPaper = (mut: (p: Paper) => void) => {
+      qc.setQueryData<Paper>(paperKeys.detail(paperId), (old) => {
+        if (!old) return old;
+        const next: Paper = { ...old, segments: old.segments ? [...old.segments] : [] };
+        mut(next);
+        return next;
+      });
+    };
+
+    const onOutlineReady = (e: MessageEvent) => {
+      const d = safeParse<{
+        segments: Segment[];
+        total_pages: number;
+        estimated_cost_usd: number;
+      }>(e.data);
+      if (!d) return;
+      patchPaper((p) => {
+        p.segments = d.segments;
+        p.total_pages = d.total_pages;
+        p.run_state = "running";
+      });
+    };
+
+    const setSegStatus = (segmentId: string, status: SegmentStatus) => {
+      patchPaper((p) => {
+        const idx = p.segments?.findIndex((s) => s.segment_id === segmentId);
+        if (p.segments && idx !== undefined && idx >= 0) {
+          p.segments[idx] = { ...p.segments[idx], status };
+        }
+      });
+    };
+
+    const onSegmentStarted = (e: MessageEvent) => {
+      const d = safeParse<Partial<Segment> & { segment_id: string }>(e.data);
+      if (!d) return;
+      patchPaper((p) => {
+        const idx = p.segments?.findIndex((s) => s.segment_id === d.segment_id);
+        if (p.segments && idx !== undefined && idx >= 0) {
+          p.segments[idx] = {
+            ...p.segments[idx],
+            ...d,
+            status: "parsing",
+            started_at: new Date().toISOString(),
+          };
+        }
+      });
+    };
+
+    const onSegmentExtracted = (e: MessageEvent) => {
+      const d = safeParse<{ segment_id: string }>(e.data);
+      if (d) setSegStatus(d.segment_id, "extracting");
+    };
+
+    const onSegmentCompleted = (e: MessageEvent) => {
+      const d = safeParse<{
+        segment_id: string;
+        cost_subtotal_usd?: number;
+        skipped?: boolean;
+      }>(e.data);
+      if (!d) return;
+      patchPaper((p) => {
+        const idx = p.segments?.findIndex((s) => s.segment_id === d.segment_id);
+        if (p.segments && idx !== undefined && idx >= 0) {
+          p.segments[idx] = {
+            ...p.segments[idx],
+            status: d.skipped ? "skipped" : "done",
+            finished_at: new Date().toISOString(),
+            cost_subtotal_usd:
+              d.cost_subtotal_usd ?? p.segments[idx].cost_subtotal_usd,
+          };
+        }
+      });
+    };
+
+    const onCostUpdated = (e: MessageEvent) => {
+      const d = safeParse<Pick<CostReport, "running_raw_usd" | "running_billed_usd">>(
+        e.data
+      );
+      if (!d) return;
+      qc.setQueryData<CostReport>(paperKeys.cost(paperId), (old) => {
+        if (!old)
+          return {
+            running_raw_usd: d.running_raw_usd,
+            running_billed_usd: d.running_billed_usd,
+            markup_factor: 1.35,
+            estimate_remaining_raw_usd: 0,
+            estimate_total_raw_usd: d.running_raw_usd,
+            breakdown: {
+              by_stage: { outline: 0, mineru_gpu: 0, extract: 0, verify: 0, localize: 0 },
+              llm_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 },
+            },
+          };
+        return {
+          ...old,
+          running_raw_usd: d.running_raw_usd,
+          running_billed_usd: d.running_billed_usd,
+        };
+      });
+    };
+
+    const onRunState = (state: RunState) => () => {
+      patchPaper((p) => {
+        p.run_state = state;
+        if (state === "completed") p.status = "ready";
+      });
+      if (state === "completed")
+        qc.invalidateQueries({ queryKey: paperKeys.list() });
+    };
+
+    es.addEventListener("outline.ready", onOutlineReady);
+    es.addEventListener("segment.started", onSegmentStarted);
+    es.addEventListener("segment.parsing", onSegmentStarted);
+    es.addEventListener("segment.extracted", onSegmentExtracted);
+    es.addEventListener("segment.completed", onSegmentCompleted);
+    es.addEventListener("cost.updated", onCostUpdated);
+    es.addEventListener("run.stopped", onRunState("stopped"));
+    es.addEventListener("run.resumed", onRunState("running"));
+    es.addEventListener("run.completed", onRunState("completed"));
+
     es.onerror = () => {
       // Don't thrash; polling covers this case.
       if (es && es.readyState === EventSource.CLOSED) return;

@@ -200,7 +200,7 @@ export const GLOSSARY: GlossarySection[] = [
     id: "decisions",
     title: "Decisions",
     intro:
-      'Every finding starts "Open." Your verdict as editor — Agree or Dismiss — determines whether it shows up in the generated review.',
+      'Every finding starts "Open." Your verdict as editor — Agree or Dismiss — determines whether it shows up in the generated review. You can also skip entire page ranges to save cost.',
     terms: [
       {
         id: "open",
@@ -225,6 +225,12 @@ export const GLOSSARY: GlossarySection[] = [
         label: "Change",
         short:
           "Every decision is reversible. Click Change on a decided card to re-open it and pick again.",
+      },
+      {
+        id: "skip",
+        label: "Skip (page range)",
+        short:
+          "Don't analyze a page range at all. Click a Skip chip below the page strip to skip any pending range — those pages go strikethrough and don't cost anything. Useful for figures appendices or sections you don't care about.",
       },
     ],
   },
@@ -287,6 +293,38 @@ export const GLOSSARY: GlossarySection[] = [
     ],
   },
   {
+    id: "cost",
+    title: "Cost",
+    intro:
+      "Loupe meters cost in real time from actual token and GPU usage — not estimates. The chip in the topbar shows running billed spend; the drawer at the bottom breaks it down by stage.",
+    terms: [
+      {
+        id: "budget-cap",
+        label: "Budget cap",
+        short:
+          "A per-paper ceiling on spend. Set your default in Settings. When running cost hits the cap, analysis auto-stops and prompts you to raise it or accept the partial result.",
+      },
+      {
+        id: "markup",
+        label: "Service markup",
+        short:
+          'The hosted loupe.morphmind.ai adds a small fee (default 1.35×) on top of raw provider cost to cover infra. Self-hosters set SERVICE_MARKUP=1.0 in .env for raw pass-through — the "fee" line disappears from the drawer entirely.',
+      },
+      {
+        id: "by-stage",
+        label: "By stage",
+        short:
+          "Raw cost broken down into outline (PyMuPDF, negligible), parse (MinerU GPU time), extract proofs, verify proofs, and localize (vision). The stacked bar in the drawer makes it easy to see where a paper's budget went.",
+      },
+      {
+        id: "tokens",
+        label: "Tokens",
+        short:
+          "Input / cached / output tokens summed across all LLM calls. Cached tokens are billed at a small fraction of input rate — so more cache hits means lower cost.",
+      },
+    ],
+  },
+  {
     id: "shortcuts",
     title: "Keyboard shortcuts",
     intro:
@@ -299,6 +337,11 @@ export const GLOSSARY: GlossarySection[] = [
         id: "review",
         label: "r",
         short: "Generate review (when every finding is decided)",
+      },
+      {
+        id: "stop",
+        label: "s",
+        short: "Stop the analysis run (or resume if already stopped)",
       },
       { id: "help", label: "?", short: "Open the shortcuts cheatsheet" },
       { id: "glossary", label: "h", short: "Open this glossary" },

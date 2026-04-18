@@ -33,9 +33,17 @@ const GROUPS: { title: string; rows: [string[], string][] }[] = [
     ],
   },
   {
-    title: "This dialog",
+    title: "Run control",
     rows: [
-      [["?"], "Show / hide shortcuts"],
+      [["s"], "Stop / Resume analysis"],
+      [["c"], "Toggle cost drawer"],
+    ],
+  },
+  {
+    title: "Help",
+    rows: [
+      [["h"], "Open the glossary"],
+      [["?"], "Show / hide this dialog"],
       [["Esc"], "Close"],
     ],
   },

@@ -127,10 +127,12 @@ async function main() {
   });
   // URL will navigate to /papers/<new-id> automatically.
   await page.waitForURL(/\/papers\/pap_/, { timeout: 5_000 });
-  // The analysis-progress view renders while status !== ready. Wait for
-  // the second step to light up so we capture a mid-pipeline moment.
-  await page.waitForSelector("text=Extract proofs", { timeout: 5_000 });
-  await page.waitForTimeout(4_500); // land on step 2
+  // Wait for the segment pipeline to reach a mid-run state. Status banner
+  // shows "Reading …" or "Checking …" during parsing/extracting/verifying.
+  await page.waitForSelector("text=/Reading|Checking|Extracting/", {
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(2_500); // settle on playhead motion
   await snap(page, "analysis-progress");
 
   await browser.close();

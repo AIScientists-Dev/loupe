@@ -15,20 +15,27 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Formula, MathText } from "./math";
-import type { Finding } from "@/lib/types";
+import { PageStrip } from "./page-strip";
+import type { Finding, Segment } from "@/lib/types";
 
 const PAGE_W = 612; // PDF points, US letter
 const PAGE_H = 792;
-const TOTAL_PAGES = 5;
+const DEFAULT_PAGES = 5;
 
 export function PdfViewer({
   paperTitle,
   findings,
   selectedFindingId,
+  segments,
+  totalPages,
+  onSkipSegment,
 }: {
   paperTitle: string;
   findings: Finding[];
+  segments?: Segment[];
+  totalPages?: number;
   selectedFindingId: string | null;
+  onSkipSegment?: (segmentId: string) => void;
 }) {
   const [zoom, setZoom] = React.useState(0.95);
   const [currentPage, setCurrentPage] = React.useState(1);
@@ -65,13 +72,24 @@ export function PdfViewer({
     return () => observer.disconnect();
   }, []);
 
+  const pageCount = totalPages ?? DEFAULT_PAGES;
+
   const jump = (dir: 1 | -1) => {
-    const next = Math.min(TOTAL_PAGES, Math.max(1, currentPage + dir));
+    const next = Math.min(pageCount, Math.max(1, currentPage + dir));
     pageRefs.current[next - 1]?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
     setCurrentPage(next);
+  };
+
+  const jumpToPage = (n: number) => {
+    const target = Math.min(pageCount, Math.max(1, n));
+    pageRefs.current[target - 1]?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    setCurrentPage(target);
   };
 
   const findingsByPage = React.useMemo(() => {
@@ -88,9 +106,18 @@ export function PdfViewer({
       <PdfToolbar
         title={paperTitle}
         page={currentPage}
+        totalPages={pageCount}
         zoom={zoom}
         onZoom={setZoom}
         onJump={jump}
+      />
+      <PageStrip
+        totalPages={pageCount}
+        segments={segments}
+        findings={findings}
+        currentPage={currentPage}
+        onPageClick={jumpToPage}
+        onSkipSegment={onSkipSegment}
       />
       <div
         ref={containerRef}
@@ -100,7 +127,7 @@ export function PdfViewer({
           className="mx-auto flex flex-col items-center gap-6"
           style={{ width: PAGE_W * zoom }}
         >
-          {Array.from({ length: TOTAL_PAGES }).map((_, i) => (
+          {Array.from({ length: pageCount }).map((_, i) => (
             <PdfPage
               key={i}
               ref={(el) => {
@@ -235,12 +262,14 @@ function EvidenceCallout({
 function PdfToolbar({
   title,
   page,
+  totalPages,
   zoom,
   onZoom,
   onJump,
 }: {
   title: string;
   page: number;
+  totalPages: number;
   zoom: number;
   onZoom: (z: number) => void;
   onJump: (dir: 1 | -1) => void;
@@ -261,7 +290,7 @@ function PdfToolbar({
           <ChevronLeft className="size-3.5" />
         </Button>
         <span className="min-w-[3rem] text-center text-xs tabular-nums">
-          {page} / {TOTAL_PAGES}
+          {page} / {totalPages}
         </span>
         <Button
           size="icon-xs"
