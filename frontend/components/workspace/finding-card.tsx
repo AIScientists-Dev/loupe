@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { MathText } from "./math";
+import { Math, MathText } from "./math";
 import { ISSUE_META, SEVERITY_META } from "./issue-type";
 import { IssueIcon } from "./issue-icon";
 import type { Finding } from "@/lib/types";
@@ -119,8 +119,8 @@ export function FindingCard(props: FindingCardProps) {
             <MathText text={finding.description} />
           </p>
 
-          <blockquote className="mt-2.5 rounded-md border border-border/80 bg-muted/40 px-3 py-2 font-serif text-[13px] leading-relaxed text-foreground/85">
-            <MathText text={finding.evidence_quote} />
+          <blockquote className="mt-2.5 overflow-x-auto rounded-md border border-border/80 bg-muted/40 px-3 py-2 font-serif text-[13px] leading-relaxed text-foreground/85">
+            <Math tex={finding.evidence_quote} />
           </blockquote>
 
           {decided ? (

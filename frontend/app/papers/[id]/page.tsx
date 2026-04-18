@@ -16,6 +16,7 @@ import {
   usePaper,
   usePaperStatus,
 } from "@/lib/hooks/use-papers";
+import { useAnalysisStream } from "@/lib/hooks/use-analysis-stream";
 
 export default function WorkspacePage({
   params,
@@ -28,6 +29,8 @@ export default function WorkspacePage({
   const isAnalyzing =
     !!paper && paper.status !== "ready" && paper.status !== "failed";
   const statusQuery = usePaperStatus(params.id, isAnalyzing);
+  // SSE drives real-time progress + finding injection; polling above is the fallback.
+  useAnalysisStream(params.id, isAnalyzing);
   const deletePaper = useDeletePaper();
 
   const polledStatus = statusQuery.data?.status;

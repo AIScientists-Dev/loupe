@@ -53,6 +53,7 @@ class LLMClient:
         system: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: int = 4096,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         route = _ROUTING.get(model)
         if not route:
@@ -65,12 +66,14 @@ class LLMClient:
 
         if fmt == "anthropic":
             headers, body = self._anthropic_payload(
-                model, messages, system, temperature, max_tokens, api_key
+                model, messages, system, temperature, max_tokens, api_key, tools
             )
         else:
             headers, body = self._openai_payload(
                 model, messages, system, temperature, max_tokens, api_key
             )
+            if tools:
+                logger.warning("tools requested for non-Anthropic provider %s — ignored", model)
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(url, headers=headers, json=body)
@@ -91,6 +94,7 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
         api_key: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple:
         headers = {
             "x-api-key": api_key,
@@ -105,6 +109,8 @@ class LLMClient:
         }
         if system:
             body["system"] = system
+        if tools:
+            body["tools"] = tools
         return headers, body
 
     @staticmethod
@@ -137,6 +143,14 @@ class LLMClient:
     @staticmethod
     def _parse_anthropic(data: Dict[str, Any]) -> str:
         content = data.get("content", [])
+        # Log server-tool usage (web_search) so callers can audit trace.
+        tool_uses = [b for b in content if b.get("type") == "server_tool_use"]
+        if tool_uses:
+            for t in tool_uses:
+                logger.info(
+                    "anthropic server tool used: name=%s input_keys=%s",
+                    t.get("name"), list((t.get("input") or {}).keys()),
+                )
         parts = [block["text"] for block in content if block.get("type") == "text"]
         return "".join(parts)
 
@@ -156,13 +170,14 @@ class LLMClient:
         system: Optional[str] = None,
         temperature: float = 0.2,
         max_tokens: int = 8192,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Any:
         """Call complete() and parse the response as JSON.
 
         Tolerates: markdown code fences, leading/trailing prose, ``json`` tags.
         Extracts the first balanced JSON value (object or array) if direct parse fails.
         """
-        raw = await self.complete(model, messages, system, temperature, max_tokens)
+        raw = await self.complete(model, messages, system, temperature, max_tokens, tools=tools)
         text = raw.strip()
 
         # Strip markdown code fences.

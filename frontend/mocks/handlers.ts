@@ -10,52 +10,101 @@ import type {
 } from "@/lib/types";
 import { FIXTURE_PAPERS, toSummary } from "./fixtures/papers";
 
-// In-memory mutable state — mocking the backend JSON file store.
+// In-memory mutable state — mocks the backend JSON file store.
 const papers = new Map<string, Paper>(FIXTURE_PAPERS.map((p) => [p.id, p]));
 
-// Scripted pipeline: when a new paper is uploaded, we advance it through
-// parse → extract_proofs → verify_proofs → ready over ~12 seconds so the
-// live analysis view has something to animate against.
-function scriptPipeline(id: string) {
-  const schedule: Array<{ step: PipelineStep; stepIndex: number; delay: number; status: PaperStatus }> =
-    [
-      { step: "parse", stepIndex: 0, delay: 0, status: "analyzing" },
-      { step: "extract_proofs", stepIndex: 1, delay: 4_000, status: "analyzing" },
-      { step: "verify_proofs", stepIndex: 2, delay: 8_000, status: "analyzing" },
-      { step: "ready", stepIndex: 3, delay: 12_000, status: "ready" },
-    ];
+// ---------------------------------------------------------------------------
+// Pub-sub for SSE: scriptPipeline publishes events, the /events handler streams.
+// ---------------------------------------------------------------------------
+type BusEvent = { event: string; data: unknown };
+type BusListener = (e: BusEvent) => void;
+const buses = new Map<string, Set<BusListener>>();
 
-  schedule.forEach(({ step, stepIndex, delay, status }) => {
+function publish(paperId: string, event: string, data: unknown) {
+  buses.get(paperId)?.forEach((cb) => {
+    try {
+      cb({ event, data });
+    } catch {
+      /* swallow */
+    }
+  });
+}
+
+function subscribe(paperId: string, cb: BusListener): () => void {
+  let set = buses.get(paperId);
+  if (!set) {
+    set = new Set();
+    buses.set(paperId, set);
+  }
+  set.add(cb);
+  return () => {
+    set!.delete(cb);
+    if (set!.size === 0) buses.delete(paperId);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Scripted 12-second pipeline for uploaded papers.
+// ---------------------------------------------------------------------------
+function scriptPipeline(id: string) {
+  const steps: PipelineStep[] = ["parse", "extract_proofs", "verify_proofs"];
+  const stepDelays = [0, 4_000, 8_000];
+
+  steps.forEach((step, i) => {
     setTimeout(() => {
       const p = papers.get(id);
       if (!p) return;
-      p.status = status;
       (p as unknown as { _step: PipelineStep })._step = step;
-      (p as unknown as { _stepIndex: number })._stepIndex = stepIndex;
-      // When ready, inject the 5-planted-bug findings as if the pipeline produced them.
-      // Start findings as localize=pending (shimmer), then flip to done over ~3s
-      // to show the "pinning → pinned" visual beat.
-      if (status === "ready" && p.findings.length === 0) {
-        const source = papers.get("pap_planted5");
-        if (source) {
-          p.findings = source.findings.map((f) => ({
-            ...f,
-            id: `${id}_${f.id}`,
-            paper_id: id,
-            localize_status: "pending",
-          }));
-          p.findings.forEach((f, i) => {
-            setTimeout(
-              () => {
-                f.localize_status = "done";
-              },
-              800 + i * 500
-            );
-          });
-        }
-      }
-    }, delay);
+      (p as unknown as { _stepIndex: number })._stepIndex = i;
+      p.status = "analyzing";
+      publish(id, "step.started", { step, step_index: i });
+    }, stepDelays[i]);
+    // step completes 200ms before the next one starts (visual beat)
+    const completeAt = (stepDelays[i + 1] ?? 12_000) - 200;
+    setTimeout(() => {
+      publish(id, "step.completed", { step });
+    }, completeAt);
   });
+
+  // After verify_proofs, inject findings + flip to ready.
+  setTimeout(() => {
+    const p = papers.get(id);
+    if (!p) return;
+    const source = papers.get("pap_planted5");
+    if (source && p.findings.length === 0) {
+      p.findings = source.findings.map((f) => ({
+        ...f,
+        id: `${id}_${f.id}`,
+        paper_id: id,
+        localize_status: "pending",
+      }));
+      // Emit finding.created for each one, staggered.
+      p.findings.forEach((f, i) => {
+        setTimeout(() => {
+          publish(id, "finding.created", { finding: f });
+        }, i * 150);
+      });
+    }
+    p.status = "ready";
+    (p as unknown as { _step: PipelineStep })._step = "ready";
+    (p as unknown as { _stepIndex: number })._stepIndex = 3;
+    publish(id, "pipeline.done", { status: "ready" });
+
+    // Progressive localize: each finding flips pending → done over 800-3300ms.
+    p.findings.forEach((f, i) => {
+      setTimeout(
+        () => {
+          f.localize_status = "done";
+          publish(id, "localize.completed", {
+            finding_id: f.id,
+            localize_status: "done",
+            bbox: f.bbox,
+          });
+        },
+        800 + i * 500
+      );
+    });
+  }, 12_000);
 }
 
 function getStep(p: Paper): { step: PipelineStep; stepIndex: number } {
@@ -69,7 +118,6 @@ function getStep(p: Paper): { step: PipelineStep; stepIndex: number } {
 }
 
 export const handlers = [
-  // GET /v1/papers — list
   http.get("/api/v1/papers", () => {
     const list = Array.from(papers.values())
       .sort((a, b) => (b.created_at > a.created_at ? 1 : -1))
@@ -77,7 +125,6 @@ export const handlers = [
     return HttpResponse.json(list);
   }),
 
-  // POST /v1/papers — upload + kick pipeline
   http.post("/api/v1/papers", async ({ request }) => {
     const form = await request.formData();
     const file = form.get("file") as File | null;
@@ -97,7 +144,6 @@ export const handlers = [
     return HttpResponse.json(paper);
   }),
 
-  // GET /v1/papers/:id — detail
   http.get("/api/v1/papers/:id", ({ params }) => {
     const p = papers.get(params.id as string);
     if (!p)
@@ -108,13 +154,11 @@ export const handlers = [
     return HttpResponse.json(p);
   }),
 
-  // DELETE /v1/papers/:id
   http.delete("/api/v1/papers/:id", ({ params }) => {
     papers.delete(params.id as string);
     return new HttpResponse(null, { status: 204 });
   }),
 
-  // GET /v1/papers/:id/status — polling
   http.get("/api/v1/papers/:id/status", ({ params }) => {
     const p = papers.get(params.id as string);
     if (!p)
@@ -134,7 +178,58 @@ export const handlers = [
     return HttpResponse.json(body);
   }),
 
-  // POST /v1/papers/:id/findings/:fid/decide
+  // GET /v1/papers/:id/events — SSE stream
+  http.get("/api/v1/papers/:id/events", ({ params }) => {
+    const id = params.id as string;
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const enqueue = (event: string, data: unknown) => {
+          const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+          try {
+            controller.enqueue(encoder.encode(payload));
+          } catch {
+            /* stream closed */
+          }
+        };
+
+        // Replay current state as an initial step.started event.
+        const p = papers.get(id);
+        if (p) {
+          const { step, stepIndex } = getStep(p);
+          enqueue("step.started", { step, step_index: stepIndex });
+          if (p.status === "ready") {
+            // If already ready, emit pipeline.done immediately and close.
+            enqueue("pipeline.done", { status: "ready" });
+            try {
+              controller.close();
+            } catch {}
+            return;
+          }
+        }
+
+        const unsub = subscribe(id, ({ event, data }) => {
+          enqueue(event, data);
+          if (event === "pipeline.done") {
+            unsub();
+            try {
+              controller.close();
+            } catch {}
+          }
+        });
+      },
+    });
+
+    return new HttpResponse(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
+    });
+  }),
+
   http.post("/api/v1/papers/:id/findings/:fid/decide", async ({ params, request }) => {
     const p = papers.get(params.id as string);
     const f = p?.findings.find((x) => x.id === params.fid);
@@ -150,7 +245,6 @@ export const handlers = [
     return HttpResponse.json(f);
   }),
 
-  // POST /v1/papers/:id/findings/:fid/investigate
   http.post(
     "/api/v1/papers/:id/findings/:fid/investigate",
     async ({ params, request }) => {

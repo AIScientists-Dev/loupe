@@ -35,7 +35,7 @@ Categories of errors to flag (use exact strings for issue_type):
   - unstated_assumption  — the proof invokes an assumption/lemma/definition that is NOT declared in the paper (check the provided paper context)
   - wrong_constant       — incorrect constant or exponent in a standard inequality (Hoeffding, Chernoff, Markov, Cauchy-Schwarz, etc.)
   - quantifier_scope     — ∀/∃ order inverted; claim uniform where proof is pointwise; N depends on δ but statement is "for all n"
-  - citation_required    — claim is a known result that requires a citation but none is given
+  - citation_required    — a numerical constant, a named theorem, or a non-trivial claim is stated as fact but requires a citation or known external result to be verified
   - definition_mismatch  — a term/symbol is used inconsistently with its declared definition
   - missing_step         — the proof skips a non-obvious step that changes the validity
   - other                — substantive error not fitting above
@@ -48,7 +48,17 @@ Rules:
   - description: 1–3 sentences. Be precise about WHAT is wrong and WHY.
   - If the proof block has no errors, return an empty array [].
 
-Return ONLY a JSON array. No markdown fences. No prose. No explanations outside the array."""
+TOOLS:
+  - You may use web_search to verify named classical results (e.g. Hoeffding inequality constants, Chernoff bounds, Nemirovski-type rates) when the proof invokes them by name. Use it only when it genuinely helps adjudicate an issue, not for every block.
+
+Return ONLY a JSON array as your final answer. No markdown fences. No prose. No explanations outside the array."""
+
+
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 3,
+}
 
 
 async def run_verify_proofs(paper: Paper, llm: LLMClient, event_bus=None) -> None:
@@ -88,6 +98,7 @@ Review this proof block for technical errors. Return the JSON array."""
             system=_SYSTEM,
             temperature=0.0,
             max_tokens=4096,
+            tools=[WEB_SEARCH_TOOL],
         )
     except Exception:
         logger.exception("verify_proofs: LLM call failed on block %s", block.proof_block_id)
