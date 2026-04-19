@@ -31,10 +31,13 @@ class Settings(BaseSettings):
     # Data
     data_dir: str = "./data"
 
-    # CORS — whitelist the frontend localhost only
+    # CORS — whitelist the frontend localhost only. Frontend dev server
+    # uses port 3009 (next dev --port 3009); 3000 kept for convenience.
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3009",
+        "http://127.0.0.1:3009",
     ]
 
     # Visual localize concurrency
