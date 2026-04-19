@@ -97,6 +97,36 @@ export function FindingPanel({
     [visible, selectedId, onSelect]
   );
 
+  // Scroll container + lookup for the selected card so we can align it to
+  // the top after a decision auto-advances.
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Wrap onDecide: after a successful decision, advance selection to the
+  // next visible finding (or previous if we were on the last one). A
+  // useEffect on `selectedId` scrolls the new card to the top.
+  const handleDecide = React.useCallback(
+    async (id: string, verdict: "agree" | "dismiss", note?: string) => {
+      const idx = visible.findIndex((f) => f.id === id);
+      const nextId =
+        idx >= 0
+          ? (visible[idx + 1]?.id ?? visible[idx - 1]?.id ?? null)
+          : null;
+      await onDecide(id, verdict, note);
+      if (nextId) onSelect(nextId);
+    },
+    [visible, onDecide, onSelect]
+  );
+
+  React.useEffect(() => {
+    if (!selectedId) return;
+    const root = listRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-finding-id="${selectedId}"]`);
+    if (!el) return;
+    const top = el.offsetTop - root.offsetTop;
+    root.scrollTo({ top: Math.max(0, top - 8), behavior: "smooth" });
+  }, [selectedId, visible.length]);
+
   // Minimal hotkeys: navigation + glossary. Decision shortcuts were removed —
   // they bypassed the note textarea, which confused the decide flow.
   useHotkeys([
@@ -162,7 +192,7 @@ export function FindingPanel({
         </div>
       </div>
 
-      <div className="flex-1 space-y-2.5 overflow-y-auto p-4">
+      <div ref={listRef} className="flex-1 space-y-2.5 overflow-y-auto p-4">
         {visible.length === 0 ? (
           <EmptyFilter filter={filter} />
         ) : (
@@ -170,10 +200,11 @@ export function FindingPanel({
             {visible.map((f) => (
               <FindingCard
                 key={f.id}
+                data-finding-id={f.id}
                 finding={f}
                 active={selectedId === f.id}
                 onSelect={() => onSelect(f.id)}
-                onDecide={(v, note) => onDecide(f.id, v, note)}
+                onDecide={(v, note) => handleDecide(f.id, v, note)}
                 onInvestigate={(msg) => onInvestigate(f.id, msg)}
                 commandSignal={
                   focusEdit && focusEdit.id === f.id

@@ -65,8 +65,43 @@ export function PdfViewer({
   >({});
   const [thumbsOpen, setThumbsOpen] = React.useState(false);
   const [thumbSize, setThumbSize] = React.useState(THUMB_DEFAULT);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
   const pageRefs = React.useRef<Array<HTMLDivElement | null>>([]);
+
+  // Trackpad pinch comes through as wheel events with ctrlKey=true.
+  // cmd-scroll on Mac gives metaKey=true. Both map to zoom.
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      // deltaY > 0 means pinch-in / scroll-down → zoom out.
+      const delta = -e.deltaY * 0.003;
+      setZoom((z) => Math.min(2, Math.max(0.5, +(z + delta).toFixed(2))));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, []);
+
+  // Track native fullscreen state so the button label reflects reality.
+  React.useEffect(() => {
+    const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  const toggleFullscreen = React.useCallback(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => undefined);
+    } else {
+      el.requestFullscreen().catch(() => undefined);
+    }
+  }, []);
 
   React.useEffect(() => {
     try {
@@ -183,7 +218,7 @@ export function PdfViewer({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-muted/30">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-muted/30">
       <PdfToolbar
         title={paperTitle}
         page={currentPage}
@@ -193,6 +228,8 @@ export function PdfViewer({
         onJump={jump}
         thumbsOpen={thumbsOpen}
         onToggleThumbs={toggleThumbs}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
       {onSkipSegment && pendingSegments.length > 0 && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-background/50 px-4 py-1.5 text-[11px]">
@@ -499,6 +536,8 @@ function PdfToolbar({
   onJump,
   thumbsOpen,
   onToggleThumbs,
+  isFullscreen,
+  onToggleFullscreen,
 }: {
   title: string;
   page: number;
@@ -508,6 +547,8 @@ function PdfToolbar({
   onJump: (dir: 1 | -1) => void;
   thumbsOpen: boolean;
   onToggleThumbs: () => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }) {
   return (
     <div className="flex h-11 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
@@ -572,14 +613,24 @@ function PdfToolbar({
           size="icon-xs"
           variant="ghost"
           onClick={() => onZoom(1)}
-          aria-label="Fit width"
+          aria-label="Reset zoom to 100%"
+          title="Reset zoom to 100%"
+        >
+          <Ruler className="size-3.5" />
+        </Button>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          onClick={onToggleFullscreen}
+          aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
         >
           <Maximize2 className="size-3.5" />
         </Button>
       </div>
-      <div className="hidden items-center gap-1.5 text-[11px] text-muted-foreground md:flex">
-        <Ruler className="size-3" /> PDF preview
-      </div>
+      {/* Right slot intentionally empty — the previous "PDF preview"
+          ornament gave no action. Keep the space for future tools. */}
+      <div className="hidden md:flex" />
     </div>
   );
 }

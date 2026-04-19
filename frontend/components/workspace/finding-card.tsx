@@ -31,6 +31,8 @@ export type FindingCardProps = {
   commandSignal?: { mode: "agree" | "dismiss" | "investigate"; v: number };
   /** When true, hide all action affordances — used on /share/:id. */
   readOnly?: boolean;
+  /** Data attribute so the panel can scroll the selected card to top. */
+  "data-finding-id"?: string;
 };
 
 export function FindingCard(props: FindingCardProps) {
@@ -77,6 +79,7 @@ export function FindingCard(props: FindingCardProps) {
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
       onClick={onSelect}
+      data-finding-id={props["data-finding-id"]}
       className={cn(
         "group relative cursor-pointer overflow-hidden rounded-xl border bg-card transition-colors",
         active
