@@ -14,6 +14,31 @@ import type {
 
 const BASE = "/api/v1";
 
+/**
+ * Normalize backend JSON so every entity exposes `.id` alongside its
+ * native `{entity}_id` field. Backend returns `paper_id`, `finding_id`,
+ * `segment_id`, `proof_block_id`, `exchange_id`, `draft_id`; the frontend
+ * types use `.id`. Rather than rewrite every call site, we alias here.
+ */
+function normalizeIds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeIds);
+  if (value && typeof value === "object") {
+    const src = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(src)) out[k] = normalizeIds(src[k]);
+    if (!("id" in out)) {
+      for (const k of Object.keys(src)) {
+        if (k.endsWith("_id") && typeof src[k] === "string") {
+          out.id = src[k];
+          break;
+        }
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -35,7 +60,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(msg);
   }
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  const json = await res.json();
+  return normalizeIds(json) as T;
 }
 
 export const api = {
@@ -63,7 +89,8 @@ export const api = {
         "Upload failed";
       throw new Error(msg);
     }
-    return res.json();
+    const json = await res.json();
+    return normalizeIds(json) as Paper;
   },
 
   decideFinding: (paperId: string, findingId: string, decision: Decision, note?: string) =>
