@@ -206,10 +206,14 @@ class Orchestrator:
         llm_tokens = {
             "input": 0, "cache_write": 0, "cache_read": 0, "output": 0,
         }
-        by_stage: dict = {}
-        # NOTE: per-tag tokens come from the ephemeral usage_tracker
-        # (process-wide). For per-paper breakdown we'd need a per-paper
-        # tracker; this aggregate is fine for the prototype.
+        # Two-bucket stage breakdown aggregated from segment data. More
+        # granular (outline / extract / verify / localize) would require a
+        # per-paper token tracker; for now we report the two buckets we can
+        # accurately measure and let the UI render whatever keys appear.
+        by_stage: dict = {
+            "mineru_gpu": round(paper.total_gpu_cost_raw(), 6),
+            "llm": round(paper.total_llm_cost_raw(), 6),
+        }
         return CostReport(
             running_raw_usd=round(running_raw, 4),
             running_billed_usd=bill_user(running_raw),

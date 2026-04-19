@@ -58,20 +58,16 @@ export interface Segment {
   finished_at?: string;
 }
 
-export interface CostBreakdown {
-  by_stage: {
-    outline: number;
-    mineru_gpu: number;
-    extract: number;
-    verify: number;
-    localize: number;
-  };
-  llm_tokens: {
-    input: number;
-    cache_read: number;
-    cache_write: number;
-    output: number;
-  };
+export interface CostSegmentBreakdown {
+  segment_id: string;
+  label: string;
+  page_start: number;
+  page_end: number;
+  classification: string;
+  status: string;
+  llm_cost_usd: number;
+  gpu_cost_usd: number;
+  cost_subtotal_usd: number;
 }
 
 export interface CostReport {
@@ -80,7 +76,19 @@ export interface CostReport {
   markup_factor: number;
   estimate_remaining_raw_usd: number;
   estimate_total_raw_usd: number;
-  breakdown: CostBreakdown;
+  estimate_total_billed_usd: number;
+  /** Aggregated per-stage raw-cost buckets. Keys are dynamic — current
+   * backend emits { mineru_gpu, llm } but more may be added. Iterate keys
+   * in the UI; never hard-code field access. */
+  by_stage: Record<string, number>;
+  by_segment: CostSegmentBreakdown[];
+  llm_tokens: {
+    input: number;
+    cache_read: number;
+    cache_write: number;
+    output: number;
+  };
+  formula_url?: string;
 }
 
 export type ProofKind = "theorem" | "lemma" | "proposition" | "proof" | "claim";

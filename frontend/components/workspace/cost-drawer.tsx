@@ -17,16 +17,19 @@ import { useCostDrawer } from "@/lib/hooks/use-cost-drawer";
 import { useSettings } from "@/lib/hooks/use-settings";
 import type { CostReport, Paper } from "@/lib/types";
 
-const STAGE_META: Record<
-  keyof CostReport["breakdown"]["by_stage"],
-  { label: string; color: string }
-> = {
+// Display metadata for each known stage bucket the backend may emit.
+// Unknown keys fall back to a grey bar + title-cased label.
+const STAGE_META: Record<string, { label: string; color: string }> = {
   outline: { label: "Outline", color: "bg-muted-foreground/40" },
   mineru_gpu: { label: "Parse (GPU)", color: "bg-brand/60" },
+  llm: { label: "LLM (extract + verify + localize)", color: "bg-primary/60" },
   extract: { label: "Extract proofs", color: "bg-primary/40" },
   verify: { label: "Verify proofs", color: "bg-primary/70" },
   localize: { label: "Localize", color: "bg-highlight/80" },
 };
+const stageLabel = (k: string) =>
+  STAGE_META[k]?.label ?? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const stageColor = (k: string) => STAGE_META[k]?.color ?? "bg-muted-foreground/40";
 
 export function CostDrawer({ paper }: { paper: Paper }) {
   const { open, setOpen } = useCostDrawer();
@@ -92,39 +95,31 @@ export function CostDrawer({ paper }: { paper: Paper }) {
                 Cost by stage
               </div>
               <div className="flex h-5 w-full overflow-hidden rounded-md bg-muted">
-                {(
-                  Object.keys(cost.breakdown.by_stage) as Array<
-                    keyof CostReport["breakdown"]["by_stage"]
-                  >
-                ).map((k) => {
-                  const amount = cost.breakdown.by_stage[k] * (cost.markup_factor ?? 1);
+                {Object.keys(cost.by_stage ?? {}).map((k) => {
+                  const amount = (cost.by_stage[k] ?? 0) * (cost.markup_factor ?? 1);
                   const width = billed > 0 ? (amount / billed) * 100 : 0;
                   if (width === 0) return null;
                   return (
                     <div
                       key={k}
-                      className={cn("h-full", STAGE_META[k].color)}
+                      className={cn("h-full", stageColor(k))}
                       style={{ width: `${width}%` }}
-                      title={`${STAGE_META[k].label}: $${amount.toFixed(4)}`}
+                      title={`${stageLabel(k)}: $${amount.toFixed(4)}`}
                     />
                   );
                 })}
               </div>
               <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                {(
-                  Object.keys(cost.breakdown.by_stage) as Array<
-                    keyof CostReport["breakdown"]["by_stage"]
-                  >
-                ).map((k) => (
+                {Object.keys(cost.by_stage ?? {}).map((k) => (
                   <div key={k} className="flex items-center justify-between">
                     <dt className="flex items-center gap-1.5 text-muted-foreground">
                       <span
-                        className={cn("size-2 rounded-sm", STAGE_META[k].color)}
+                        className={cn("size-2 rounded-sm", stageColor(k))}
                       />
-                      {STAGE_META[k].label}
+                      {stageLabel(k)}
                     </dt>
                     <dd className="tabular-nums text-foreground">
-                      ${(cost.breakdown.by_stage[k] * (cost.markup_factor ?? 1)).toFixed(4)}
+                      ${((cost.by_stage[k] ?? 0) * (cost.markup_factor ?? 1)).toFixed(4)}
                     </dd>
                   </div>
                 ))}
@@ -139,15 +134,15 @@ export function CostDrawer({ paper }: { paper: Paper }) {
                 <dl className="space-y-0.5 tabular-nums">
                   <Row
                     k="Input"
-                    v={cost.breakdown.llm_tokens.input.toLocaleString()}
+                    v={(cost.llm_tokens?.input ?? 0).toLocaleString()}
                   />
                   <Row
                     k="Cached"
-                    v={cost.breakdown.llm_tokens.cache_read.toLocaleString()}
+                    v={(cost.llm_tokens?.cache_read ?? 0).toLocaleString()}
                   />
                   <Row
                     k="Output"
-                    v={cost.breakdown.llm_tokens.output.toLocaleString()}
+                    v={(cost.llm_tokens?.output ?? 0).toLocaleString()}
                   />
                 </dl>
               </div>
