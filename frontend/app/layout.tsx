@@ -73,11 +73,11 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${notoSans.variable} ${jetbrainsMono.variable} ${sourceSerif.variable}`}
     >
-      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+      <body className="h-screen overflow-hidden bg-background font-sans text-foreground antialiased">
         <Providers>
-          <div className="flex min-h-screen">
+          <div className="flex h-screen">
             <Sidebar />
-            <main className="flex-1 overflow-hidden">{children}</main>
+            <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
           </div>
         </Providers>
       </body>

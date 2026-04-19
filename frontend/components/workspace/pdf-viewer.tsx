@@ -136,6 +136,7 @@ export function PdfViewer({
               page={i + 1}
               zoom={zoom}
               paperTitle={paperTitle}
+              isPlanted={paperTitle === "Sharp Concentration for a Telescoped Estimator"}
               findings={findingsByPage[i + 1] ?? []}
               selectedFindingId={selectedFindingId}
             />
@@ -152,10 +153,11 @@ const PdfPage = React.forwardRef<
     page: number;
     zoom: number;
     paperTitle: string;
+    isPlanted: boolean;
     findings: Finding[];
     selectedFindingId: string | null;
   }
->(({ page, zoom, paperTitle, findings, selectedFindingId }, ref) => {
+>(({ page, zoom, paperTitle, isPlanted, findings, selectedFindingId }, ref) => {
   return (
     <div
       ref={ref}
@@ -180,7 +182,11 @@ const PdfPage = React.forwardRef<
           <span className="float-right">{page}</span>
         </div>
         <div className="px-16 pt-1 font-serif text-[10.5pt] leading-relaxed text-neutral-900">
-          <SyntheticPageContent page={page} />
+          {isPlanted ? (
+            <SyntheticPageContent page={page} />
+          ) : (
+            <BlankPagePlaceholder paperTitle={paperTitle} page={page} />
+          )}
         </div>
 
         {findings.map((f) => (
@@ -244,7 +250,11 @@ function EvidenceCallout({
       }}
     >
       <span className="block w-full overflow-hidden">
-        <Formula tex={finding.evidence_quote} />
+        {finding.evidence_quote.includes("$") ? (
+          <MathText text={finding.evidence_quote} />
+        ) : (
+          <Formula tex={finding.evidence_quote} />
+        )}
       </span>
       {active && (
         <motion.span
@@ -332,6 +342,38 @@ function PdfToolbar({
       <div className="hidden items-center gap-1.5 text-[11px] text-muted-foreground md:flex">
         <Ruler className="size-3" /> synthetic preview
       </div>
+    </div>
+  );
+}
+
+/**
+ * Blank-page placeholder used when the uploaded paper isn't the hand-crafted
+ * demo. Synthetic prose wouldn't match real bboxes, so we render a clean
+ * page with the actual title on page 1 and just a page number on others.
+ */
+function BlankPagePlaceholder({
+  paperTitle,
+  page,
+}: {
+  paperTitle: string;
+  page: number;
+}) {
+  if (page === 1) {
+    return (
+      <div className="flex h-full flex-col items-center justify-start pt-24 text-center">
+        <h1 className="max-w-md font-serif text-[15pt] font-semibold leading-tight">
+          {paperTitle}
+        </h1>
+        <div className="mt-2 text-[10pt] text-neutral-500">
+          PDF preview not yet rendered — findings below are flagged at their
+          original bbox positions.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full items-center justify-center text-[10pt] text-neutral-400">
+      Page {page}
     </div>
   );
 }

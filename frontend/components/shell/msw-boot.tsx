@@ -55,7 +55,34 @@ export function MswBoot({ children }: { children: React.ReactNode }) {
           setReady(true);
         });
     } else {
-      setReady(true);
+      // If a previous session registered the MSW service worker, unregister
+      // it now — otherwise it would keep intercepting real backend requests.
+      if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+        navigator.serviceWorker
+          .getRegistrations()
+          .then((regs) => {
+            const mswRegs = regs.filter((r) =>
+              (r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || "")
+                .includes("mockServiceWorker")
+            );
+            if (mswRegs.length) {
+              // eslint-disable-next-line no-console
+              console.log("[loupe] Unregistering stale MSW worker(s)");
+              return Promise.all(mswRegs.map((r) => r.unregister())).then(() => {
+                // Reload once so subsequent fetches go to the real network.
+                if (typeof sessionStorage !== "undefined" &&
+                    !sessionStorage.getItem("loupe-msw-unregistered")) {
+                  sessionStorage.setItem("loupe-msw-unregistered", "1");
+                  window.location.reload();
+                }
+              });
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => setReady(true));
+      } else {
+        setReady(true);
+      }
     }
   }, [useMock]);
 
