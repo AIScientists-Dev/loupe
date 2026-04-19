@@ -127,6 +127,9 @@ export const api = {
 
   pdfUrl: (paperId: string) => `${BASE}/papers/${paperId}/pdf`,
 
+  pdfAnnotatedUrl: (paperId: string) =>
+    `${BASE}/papers/${paperId}/pdf-annotated`,
+
   pageThumbUrl: (paperId: string, page: number) =>
     `${BASE}/papers/${paperId}/pages/${page}/thumb.png`,
 

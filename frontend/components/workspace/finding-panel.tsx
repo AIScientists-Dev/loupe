@@ -123,8 +123,8 @@ export function FindingPanel({
     if (!root) return;
     const el = root.querySelector<HTMLElement>(`[data-finding-id="${selectedId}"]`);
     if (!el) return;
-    const top = el.offsetTop - root.offsetTop;
-    root.scrollTo({ top: Math.max(0, top - 8), behavior: "smooth" });
+    const delta = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
+    root.scrollTo({ top: root.scrollTop + delta - 8, behavior: "smooth" });
   }, [selectedId, visible.length]);
 
   // Minimal hotkeys: navigation + glossary. Decision shortcuts were removed —

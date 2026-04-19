@@ -101,6 +101,65 @@ def serve_pdf(paper_id: str, orch: Orchestrator = Depends(_orch)):
     return Response(content=pdf_bytes, media_type="application/pdf")
 
 
+@router.get("/{paper_id}/pdf-annotated")
+def serve_pdf_annotated(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    """Original PDF + PDF annotations (red rectangles + popup notes) for every
+    KEPT finding. Uses native PDF annotation objects so the paper's own
+    existing annotations (if any) are preserved, and the new ones are
+    toggleable/interactive in any reader."""
+    pdf_bytes = orch.store.load_pdf(paper_id)
+    paper = orch.get_paper(paper_id)
+    if not pdf_bytes or not paper:
+        raise HTTPException(404, detail={"code": "not_found", "message": "PDF not found"})
+
+    import io
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        added = 0
+        for f in paper.findings:
+            if f.soft_deleted:
+                continue
+            bbox = f.bbox
+            if bbox is None:
+                continue
+            page_idx = bbox.page - 1
+            if page_idx < 0 or page_idx >= doc.page_count:
+                continue
+            page = doc.load_page(page_idx)
+            rect = fitz.Rect(
+                bbox.x, bbox.y,
+                bbox.x + bbox.width, bbox.y + bbox.height,
+            )
+            annot = page.add_rect_annot(rect)
+            # red stroke, no fill, thicker border
+            annot.set_colors(stroke=(0.86, 0.15, 0.15))
+            annot.set_border(width=1.6)
+            annot.set_opacity(0.9)
+            # popup/title shows in-reader on hover/click
+            annot.set_info(
+                title=f"Loupe — {f.issue_type} ({f.severity})",
+                content=f"{f.description}\n\nEvidence: {f.evidence_quote[:400]}",
+            )
+            annot.update()
+            added += 1
+
+        buf = io.BytesIO()
+        # incremental=False so we get a fresh PDF with the annotation tree included
+        doc.save(buf, garbage=4, deflate=True)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{paper.filename or "paper"}_annotated.pdf"',
+                "X-Loupe-Annotations-Added": str(added),
+            },
+        )
+    finally:
+        doc.close()
+
+
 # -- page thumbnail (for the top thumbnail strip) ----------------------------
 
 @router.get("/{paper_id}/pages/{page_number}/thumb.png")

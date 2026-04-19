@@ -20,6 +20,7 @@ import {
   Check,
   X as XIcon,
   Undo2,
+  Download,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -218,7 +219,10 @@ export function PdfViewer({
   };
 
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-muted/30">
+    <div
+      ref={rootRef}
+      className="flex h-full min-h-0 flex-col bg-muted/30"
+    >
       <PdfToolbar
         title={paperTitle}
         page={currentPage}
@@ -230,6 +234,7 @@ export function PdfViewer({
         onToggleThumbs={toggleThumbs}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+        paperId={paperId}
       />
       {onSkipSegment && pendingSegments.length > 0 && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-background/50 px-4 py-1.5 text-[11px]">
@@ -538,6 +543,7 @@ function PdfToolbar({
   onToggleThumbs,
   isFullscreen,
   onToggleFullscreen,
+  paperId,
 }: {
   title: string;
   page: number;
@@ -549,9 +555,12 @@ function PdfToolbar({
   onToggleThumbs: () => void;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  paperId: string;
 }) {
   return (
-    <div className="flex h-11 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
+    // sticky so it stays pinned at the top of the fullscreen viewport
+    // (zoom controls remain reachable in fullscreen mode)
+    <div className="sticky top-0 z-20 flex h-11 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
       <div className="flex items-center gap-1 truncate">
         <Button
           size="icon-xs"
@@ -628,9 +637,17 @@ function PdfToolbar({
           <Maximize2 className="size-3.5" />
         </Button>
       </div>
-      {/* Right slot intentionally empty — the previous "PDF preview"
-          ornament gave no action. Keep the space for future tools. */}
-      <div className="hidden md:flex" />
+      <div className="hidden items-center gap-1 md:flex">
+        <a
+          href={`/api/v1/papers/${paperId}/pdf-annotated`}
+          download
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          title="Download the PDF with red boxes baked in as annotations"
+        >
+          <Download className="size-3" />
+          Download annotated PDF
+        </a>
+      </div>
     </div>
   );
 }
