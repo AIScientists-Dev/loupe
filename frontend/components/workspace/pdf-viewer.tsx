@@ -221,7 +221,7 @@ export function PdfViewer({
   return (
     <div
       ref={rootRef}
-      className="flex h-full min-h-0 flex-col bg-muted/30"
+      className="relative flex h-full min-h-0 flex-col bg-muted/30"
     >
       <PdfToolbar
         title={paperTitle}
@@ -236,6 +236,51 @@ export function PdfViewer({
         onToggleFullscreen={toggleFullscreen}
         paperId={paperId}
       />
+      {/* Floating zoom pill, only in fullscreen. High contrast so it's
+          obvious against any PDF page color, mouse-reachable without
+          travelling to the top toolbar. */}
+      {isFullscreen && (
+        <div className="pointer-events-auto fixed bottom-6 right-6 z-50 flex items-center gap-1 rounded-full border border-border bg-background/95 px-2 py-1 shadow-lg backdrop-blur">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
+            aria-label="Zoom out"
+          >
+            <Minus className="size-4" />
+          </Button>
+          <span className="min-w-[3rem] text-center text-xs font-medium tabular-nums">
+            {Math.round(zoom * 100)}%
+          </span>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
+            aria-label="Zoom in"
+          >
+            <Plus className="size-4" />
+          </Button>
+          <span className="mx-1 h-4 w-px bg-border" />
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => setZoom(1)}
+            aria-label="Reset zoom"
+            title="Reset zoom to 100%"
+          >
+            <Ruler className="size-3.5" />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={toggleFullscreen}
+            aria-label="Exit fullscreen"
+            title="Exit fullscreen"
+          >
+            <XIcon className="size-4" />
+          </Button>
+        </div>
+      )}
       {onSkipSegment && pendingSegments.length > 0 && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-background/50 px-4 py-1.5 text-[11px]">
           <span className="shrink-0 font-semibold uppercase tracking-wider text-muted-foreground">
