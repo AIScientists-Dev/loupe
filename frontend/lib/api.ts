@@ -71,7 +71,7 @@ export const api = {
       `/papers/${paperId}/findings/${findingId}/decide`,
       {
         method: "POST",
-        body: JSON.stringify({ verdict: decision, note }),
+        body: JSON.stringify({ decision, note }),
       }
     ),
 
