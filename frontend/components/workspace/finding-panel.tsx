@@ -2,21 +2,15 @@
 
 import * as React from "react";
 import { AnimatePresence } from "framer-motion";
-import { Eye, EyeOff, Keyboard, SortAsc } from "lucide-react";
+import { Eye, EyeOff, SortAsc } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useHotkeys } from "@/lib/hooks/use-hotkeys";
 import { useGlossary } from "@/lib/hooks/use-glossary";
 import { InfoTrigger } from "@/components/glossary/info-trigger";
 import { FindingCard } from "./finding-card";
-import { ShortcutsHelpDialog, Kbd } from "./shortcuts-help";
 import type { Finding } from "@/lib/types";
 
 type FilterKey = "open" | "agreed" | "dismissed";
@@ -24,7 +18,16 @@ type SortKey = "severity" | "page";
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
 
-type Command = { id: string; mode: "agree" | "dismiss" | "investigate"; v: number };
+/**
+ * Imperative signal to reopen a previously-decided finding: switches the panel
+ * filter to the matching tab and opens the card in editing mode with the note
+ * textarea pre-rendered. Keyed on `v` so the same id can fire repeatedly.
+ */
+export type FocusEditSignal = {
+  id: string;
+  decision: "agree" | "dismiss";
+  v: number;
+};
 
 export function FindingPanel({
   findings,
@@ -33,6 +36,7 @@ export function FindingPanel({
   onDecide,
   onInvestigate,
   onGenerateReview,
+  focusEdit,
   readOnly,
 }: {
   findings: Finding[];
@@ -41,13 +45,12 @@ export function FindingPanel({
   onDecide: (id: string, verdict: "agree" | "dismiss", note?: string) => Promise<void>;
   onInvestigate: (id: string, message: string) => Promise<void>;
   onGenerateReview?: () => void;
+  focusEdit?: FocusEditSignal;
   readOnly?: boolean;
 }) {
   const [filter, setFilter] = React.useState<FilterKey>("open");
   const [sort, setSort] = React.useState<SortKey>("severity");
   const [showDismissed, setShowDismissed] = React.useState(false);
-  const [helpOpen, setHelpOpen] = React.useState(false);
-  const [command, setCommand] = React.useState<Command | null>(null);
   const openGlossary = useGlossary((s) => s.openAt);
 
   const counts = React.useMemo(() => {
@@ -94,7 +97,8 @@ export function FindingPanel({
     [visible, selectedId, onSelect]
   );
 
-  // Hotkeys
+  // Minimal hotkeys: navigation + glossary. Decision shortcuts were removed —
+  // they bypassed the note textarea, which confused the decide flow.
   useHotkeys([
     {
       keys: ["j", "ArrowDown"],
@@ -111,49 +115,6 @@ export function FindingPanel({
       },
     },
     {
-      keys: ["a"],
-      handler: async (e) => {
-        if (!selectedId) return;
-        const f = findings.find((x) => x.id === selectedId);
-        if (!f) return;
-        e.preventDefault();
-        await onDecide(selectedId, "agree");
-      },
-    },
-    {
-      keys: ["d"],
-      handler: async (e) => {
-        if (!selectedId) return;
-        const f = findings.find((x) => x.id === selectedId);
-        if (!f) return;
-        e.preventDefault();
-        await onDecide(selectedId, "dismiss");
-      },
-    },
-    {
-      keys: ["i"],
-      handler: (e) => {
-        if (!selectedId) return;
-        e.preventDefault();
-        setCommand({ id: selectedId, mode: "investigate", v: Date.now() });
-      },
-    },
-    {
-      keys: ["r"],
-      handler: (e) => {
-        if (!allDecided) return;
-        e.preventDefault();
-        onGenerateReview?.();
-      },
-    },
-    {
-      keys: ["?"],
-      handler: (e) => {
-        e.preventDefault();
-        setHelpOpen((v) => !v);
-      },
-    },
-    {
       keys: ["h"],
       handler: (e) => {
         e.preventDefault();
@@ -161,6 +122,16 @@ export function FindingPanel({
       },
     },
   ]);
+
+  // Reopen flow: when focusEdit fires, switch filter to the decided tab so
+  // the target card is rendered, then pass a commandSignal to open editing
+  // mode in the right verdict.
+  React.useEffect(() => {
+    if (!focusEdit) return;
+    setFilter(focusEdit.decision === "agree" ? "agreed" : "dismissed");
+    onSelect(focusEdit.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusEdit?.v]);
 
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-background">
@@ -205,8 +176,8 @@ export function FindingPanel({
                 onDecide={(v, note) => onDecide(f.id, v, note)}
                 onInvestigate={(msg) => onInvestigate(f.id, msg)}
                 commandSignal={
-                  command?.id === f.id
-                    ? { mode: command.mode, v: command.v }
+                  focusEdit && focusEdit.id === f.id
+                    ? { mode: focusEdit.decision, v: focusEdit.v }
                     : undefined
                 }
                 readOnly={readOnly}
@@ -243,44 +214,7 @@ export function FindingPanel({
             Generate review
           </Button>
         </div>
-
-        <div className="flex items-center justify-between pt-0.5 text-[10.5px] text-muted-foreground/80">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="inline-flex items-center gap-1">
-              <Kbd>j</Kbd>
-              <Kbd>k</Kbd>
-              <span className="ml-0.5">navigate</span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Kbd>a</Kbd>
-              <span className="ml-0.5">agree</span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Kbd>d</Kbd>
-              <span className="ml-0.5">dismiss</span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Kbd>i</Kbd>
-              <span className="ml-0.5">investigate</span>
-            </span>
-          </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => setHelpOpen(true)}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label="Keyboard shortcuts"
-              >
-                <Keyboard className="size-3" />
-                <Kbd>?</Kbd>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>All shortcuts</TooltipContent>
-          </Tooltip>
-        </div>
       </div>
-
-      <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
 }

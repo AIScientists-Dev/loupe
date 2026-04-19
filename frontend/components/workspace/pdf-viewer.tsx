@@ -17,6 +17,9 @@ import {
   PanelLeft,
   PanelLeftClose,
   SkipForward,
+  Check,
+  X as XIcon,
+  Undo2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -42,6 +45,7 @@ export function PdfViewer({
   segments,
   totalPages,
   onSkipSegment,
+  onReopenFinding,
 }: {
   paperId: string;
   paperTitle: string;
@@ -50,6 +54,8 @@ export function PdfViewer({
   totalPages?: number;
   selectedFindingId: string | null;
   onSkipSegment?: (segmentId: string) => void;
+  /** Click handler for the Reopen button on a decided bbox. */
+  onReopenFinding?: (id: string) => void;
 }) {
   const [zoom, setZoom] = React.useState(1);
   const [currentPage, setCurrentPage] = React.useState(1);
@@ -225,16 +231,16 @@ export function PdfViewer({
       >
         <AnimatePresence initial={false}>
           {thumbsOpen && pageCount > 0 && (
-            // Framer animates only the open/close (opacity) — width tracks
-            // thumbSize directly via inline style so the slider feels
-            // monotone instead of re-triggering a 0.2s animation per tick.
+            // The aside width is FIXED (always sized for THUMB_MAX) so the
+            // slider below it stays put as you drag. Only the thumbnail
+            // images inside this panel scale with `thumbSize`.
             <motion.aside
               key="thumbs"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              style={{ width: thumbSize + 48 }}
+              style={{ width: THUMB_MAX + 48 }}
               className="relative flex shrink-0 flex-col overflow-hidden border-r border-border bg-background/70"
             >
               <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
@@ -360,6 +366,7 @@ export function PdfViewer({
                           finding={f}
                           pageHeight={size.height}
                           active={selectedFindingId === f.id}
+                          onReopen={onReopenFinding}
                         />
                       ))}
                     </div>
@@ -373,14 +380,21 @@ export function PdfViewer({
   );
 }
 
+const DECISION_COLORS = {
+  agree: { border: "rgb(34, 197, 94)", bg: "rgba(34, 197, 94, 0.10)" },
+  dismiss: { border: "rgb(148, 163, 184)", bg: "rgba(148, 163, 184, 0.08)" },
+} as const;
+
 function EvidenceCallout({
   finding,
   pageHeight,
   active,
+  onReopen,
 }: {
   finding: Finding;
   pageHeight: number;
   active: boolean;
+  onReopen?: (id: string) => void;
 }) {
   if (!finding.bbox) return null;
   if (finding.localize_status === "dropped") return null;
@@ -389,7 +403,56 @@ function EvidenceCallout({
   // PDF-native bbox origin is bottom-left; CSS is top-left. Convert Y.
   const cssTop = Math.max(0, pageHeight - y - height);
   const pending = finding.localize_status === "pending";
+  const decided = finding.decision;
   const severityVar = `var(--severity-${finding.severity})`;
+
+  // Decided finding: muted green/gray border and tint, with a small
+  // "Processed — Agreed/Dismissed" chip and a Reopen button.
+  if (decided) {
+    const c = DECISION_COLORS[decided];
+    const label = decided === "agree" ? "Agreed" : "Dismissed";
+    return (
+      <motion.div
+        initial={false}
+        animate={{ opacity: 1 }}
+        className="absolute rounded-sm"
+        style={{
+          left: x,
+          top: cssTop,
+          width,
+          minHeight: height,
+          border: `1.5px solid ${c.border}`,
+          backgroundColor: c.bg,
+        }}
+      >
+        <div
+          className="pointer-events-auto absolute left-0 top-0 -translate-y-full pr-1 pb-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span
+            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-medium shadow-sm"
+            style={{ borderColor: c.border, color: c.border }}
+          >
+            {decided === "agree" ? (
+              <Check className="size-3" />
+            ) : (
+              <XIcon className="size-3" />
+            )}
+            Processed — {label}
+            {onReopen && (
+              <button
+                onClick={() => onReopen(finding.id)}
+                className="ml-1 inline-flex items-center gap-0.5 rounded-sm border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-normal text-foreground/80 transition-colors hover:border-primary/50 hover:text-foreground"
+                title="Reopen and change this decision"
+              >
+                <Undo2 className="size-2.5" /> Reopen
+              </button>
+            )}
+          </span>
+        </div>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div

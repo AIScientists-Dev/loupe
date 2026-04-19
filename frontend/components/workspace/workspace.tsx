@@ -4,7 +4,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { PdfViewer } from "./pdf-viewer";
-import { FindingPanel } from "./finding-panel";
+import { FindingPanel, type FocusEditSignal } from "./finding-panel";
 import { CostDrawer } from "./cost-drawer";
 import { DraftReviewDialog } from "../review/draft-review-dialog";
 import {
@@ -23,6 +23,16 @@ export function Workspace({ paper }: { paper: Paper }) {
     paper.findings[0]?.id ?? null
   );
   const [reviewOpen, setReviewOpen] = React.useState(false);
+  const [focusEdit, setFocusEdit] = React.useState<FocusEditSignal | undefined>();
+
+  const handleReopen = React.useCallback(
+    (id: string) => {
+      const f = paper.findings.find((x) => x.id === id);
+      if (!f?.decision) return;
+      setFocusEdit({ id, decision: f.decision, v: Date.now() });
+    },
+    [paper.findings]
+  );
 
   const decide = useDecideFinding(paper.id);
   const investigate = useInvestigateFinding(paper.id);
@@ -83,11 +93,13 @@ export function Workspace({ paper }: { paper: Paper }) {
         segments={paper.segments}
         totalPages={paper.total_pages}
         onSkipSegment={handleSkip}
+        onReopenFinding={handleReopen}
       />
       <FindingPanel
         findings={paper.findings}
         selectedId={selectedId}
         onSelect={(id) => setSelectedId(id)}
+        focusEdit={focusEdit}
         onDecide={async (id, verdict, note) => {
           try {
             await decide.mutateAsync({ findingId: id, decision: verdict, note });
