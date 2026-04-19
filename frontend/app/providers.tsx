@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { MswBoot } from "@/components/shell/msw-boot";
 import { GlossarySheet } from "@/components/glossary/glossary-sheet";
+import { SettingsDialog } from "@/components/settings/settings-dialog";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = React.useState(
@@ -35,6 +36,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <TooltipProvider delayDuration={200}>
             {children}
             <GlossarySheet />
+            <SettingsDialog />
             <Toaster />
           </TooltipProvider>
         </MswBoot>

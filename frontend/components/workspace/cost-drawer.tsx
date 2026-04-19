@@ -34,15 +34,12 @@ export function CostDrawer({ paper }: { paper: Paper }) {
   const budgetCap = useSettings((s) => s.defaultBudgetCapUsd);
 
   const billed = cost?.running_billed_usd ?? 0;
-  const raw = cost?.running_raw_usd ?? 0;
-  const markup = cost?.markup_factor ?? 1;
-  const showMarkup = markup > 1.0001;
   const ratio = budgetCap > 0 ? billed / budgetCap : 0;
 
   return (
     <div
       className={cn(
-        "shrink-0 border-t border-border bg-background transition-all duration-200",
+        "relative z-20 w-full shrink-0 overflow-hidden border-t border-border bg-background transition-all duration-200",
         open ? "h-[280px]" : "h-10"
       )}
     >
@@ -57,16 +54,11 @@ export function CostDrawer({ paper }: { paper: Paper }) {
         <div className="flex items-center gap-2">
           <CircleDollarSign className="size-3.5 text-muted-foreground" />
           <span className="font-medium text-foreground">
-            ${billed.toFixed(2)} billed
+            ${billed.toFixed(2)}
           </span>
-          {showMarkup && (
-            <span className="text-muted-foreground">
-              (raw ${raw.toFixed(2)} · fee {markup.toFixed(2)}×)
-            </span>
-          )}
           {budgetCap > 0 && (
             <span className="text-muted-foreground">
-              · cap ${budgetCap.toFixed(2)}
+              of ${budgetCap.toFixed(2)} cap
             </span>
           )}
         </div>
@@ -93,7 +85,7 @@ export function CostDrawer({ paper }: { paper: Paper }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="grid h-[240px] grid-cols-[minmax(0,1fr)_260px] gap-6 overflow-hidden border-t border-border px-5 py-4"
+            className="grid h-[240px] w-full grid-cols-[minmax(0,1fr)_260px] gap-6 overflow-hidden border-t border-border px-5 py-4"
           >
             <div>
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -105,8 +97,8 @@ export function CostDrawer({ paper }: { paper: Paper }) {
                     keyof CostReport["breakdown"]["by_stage"]
                   >
                 ).map((k) => {
-                  const amount = cost.breakdown.by_stage[k];
-                  const width = raw > 0 ? (amount / raw) * 100 : 0;
+                  const amount = cost.breakdown.by_stage[k] * (cost.markup_factor ?? 1);
+                  const width = billed > 0 ? (amount / billed) * 100 : 0;
                   if (width === 0) return null;
                   return (
                     <div
@@ -132,7 +124,7 @@ export function CostDrawer({ paper }: { paper: Paper }) {
                       {STAGE_META[k].label}
                     </dt>
                     <dd className="tabular-nums text-foreground">
-                      ${cost.breakdown.by_stage[k].toFixed(4)}
+                      ${(cost.breakdown.by_stage[k] * (cost.markup_factor ?? 1)).toFixed(4)}
                     </dd>
                   </div>
                 ))}

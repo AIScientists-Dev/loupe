@@ -34,10 +34,10 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
-      // Bold solid emerald SVG — preferred by modern browsers for tab icons.
-      { url: "/favicon.svg", type: "image/svg+xml" },
-      // ICO bundle (16/32/48) — fallback for older browsers.
-      { url: "/favicon.ico", sizes: "any" },
+      // Bold solid emerald SVG — preferred by modern browsers.
+      // `?v=2` cache-busts browsers that aggressively cache favicons.
+      { url: "/favicon.svg?v=2", type: "image/svg+xml" },
+      { url: "/favicon.ico?v=2", sizes: "any" },
       { url: "/android-chrome-192.png", sizes: "192x192", type: "image/png" },
       { url: "/android-chrome-512.png", sizes: "512x512", type: "image/png" },
     ],

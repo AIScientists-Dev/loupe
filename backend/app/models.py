@@ -244,6 +244,12 @@ class Paper(BaseModel):
     segments: List[Segment] = Field(default_factory=list)
     pricing_snapshot: Optional[Dict] = None
 
+    # Stable "what the verifier should know about the whole paper" digest.
+    # Built once after planning (PyMuPDF text-extract of the non-proof
+    # classified segments). Used as the CACHEABLE part of verify_proofs
+    # prompts so the growing paper.markdown doesn't break the cache.
+    stable_digest: str = ""
+
     # Pipeline outputs (accumulated across all segments)
     markdown: str = ""
     page_map: List[PageMapEntry] = Field(default_factory=list)

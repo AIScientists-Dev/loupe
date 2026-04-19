@@ -3,17 +3,17 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, Link2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Workspace } from "@/components/workspace/workspace";
 import { StatusBanner } from "@/components/workspace/status-banner";
 import { RunControls } from "@/components/workspace/run-controls";
 import { CostChip } from "@/components/workspace/cost-chip";
+import { SharePaperDialog } from "@/components/papers/share-paper-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
-  useDeletePaper,
   usePaper,
   usePaperStatus,
   useResumePaper,
@@ -31,11 +31,11 @@ export default function WorkspacePage({
   const router = useRouter();
   const paperQuery = usePaper(params.id);
   const paper = paperQuery.data;
+  const [shareOpen, setShareOpen] = React.useState(false);
   const isAnalyzing =
     !!paper && paper.status !== "ready" && paper.status !== "failed";
   const statusQuery = usePaperStatus(params.id, isAnalyzing);
   useAnalysisStream(params.id, isAnalyzing);
-  const deletePaper = useDeletePaper();
   const stop = useStopPaper();
   const resume = useResumePaper();
   const toggleCostDrawer = useCostDrawer((s) => s.toggle);
@@ -111,27 +111,25 @@ export default function WorkspacePage({
           {paper && <CostChip paper={paper} />}
           {paper && (
             <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Delete paper"
-              onClick={async () => {
-                if (!confirm("Delete this paper? This cannot be undone.")) return;
-                try {
-                  await deletePaper.mutateAsync(paper.id);
-                  toast.success("Paper deleted");
-                  router.push("/papers");
-                } catch (err) {
-                  toast.error("Delete failed", {
-                    description: err instanceof Error ? err.message : undefined,
-                  });
-                }
-              }}
+              variant="outline"
+              size="sm"
+              onClick={() => setShareOpen(true)}
+              className="gap-1.5"
+              aria-label="Share paper"
             >
-              <Trash2 className="size-4" />
+              <Link2 className="size-3.5" /> Share
             </Button>
           )}
         </div>
       </header>
+
+      {paper && (
+        <SharePaperDialog
+          paper={paper}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
 
       <section className="flex min-h-0 flex-1 overflow-hidden">
         {paperQuery.isLoading ? (

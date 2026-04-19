@@ -12,6 +12,7 @@ Strategy
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
@@ -19,6 +20,14 @@ from app.models import PageMapEntry, Paper, ProofBlock, ProofKind
 from app.services.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
+
+# Cheap regex pre-filter: if the segment's markdown has zero tokens that
+# look like formal-proof markers, skip the LLM extract call entirely.
+# Saves 2–3 empty calls per typical paper (~$0.06).
+_PROOF_MARKER_RE = re.compile(
+    r"\b(?:theorem|lemma|proposition|corollary|claim|proof)\b",
+    re.IGNORECASE,
+)
 
 
 _SYSTEM = """You are a mathematical proof structure extractor. Given a paper's markdown, identify every formal theorem-like statement (theorem, lemma, proposition, corollary, claim) and its proof (if present in the same paper).
@@ -50,6 +59,11 @@ async def extract_proofs_from_markdown(
     it wants to merge (offset += aggregate_length at merge time).
     """
     if not markdown:
+        return []
+
+    # Keyword pre-filter: avoid the LLM call if nothing proof-like is present.
+    if not _PROOF_MARKER_RE.search(markdown):
+        logger.info("extract_proofs: no proof markers in segment markdown — skipping LLM call")
         return []
 
     prompt = f"Markdown:\n\n\"\"\"\n{markdown}\n\"\"\""

@@ -15,6 +15,7 @@ import {
   useStopPaper,
 } from "@/lib/hooks/use-papers";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useSettingsDialog } from "@/lib/hooks/use-settings-dialog";
 import type { Paper } from "@/lib/types";
 
 export function Workspace({ paper }: { paper: Paper }) {
@@ -28,6 +29,7 @@ export function Workspace({ paper }: { paper: Paper }) {
   const skip = useSkipSegment(paper.id);
   const stop = useStopPaper();
   const budgetCap = useSettings((s) => s.defaultBudgetCapUsd);
+  const openSettings = useSettingsDialog((s) => s.openDialog);
   const { data: cost } = usePaperCost(paper.id, true);
 
   // Budget guardrail: auto-stop if running billed cost exceeds the user's cap.
@@ -52,9 +54,7 @@ export function Workspace({ paper }: { paper: Paper }) {
           duration: 10_000,
           action: {
             label: "Open Settings",
-            onClick: () => {
-              window.location.href = "/settings";
-            },
+            onClick: () => openSettings(),
           },
         }
       );
@@ -73,8 +73,8 @@ export function Workspace({ paper }: { paper: Paper }) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(420px,460px)]">
+    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+      <div className="grid min-h-0 w-full flex-1 grid-cols-[minmax(0,1fr)_minmax(420px,460px)] overflow-hidden">
       <PdfViewer
         paperTitle={paper.title}
         findings={paper.findings}

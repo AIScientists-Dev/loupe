@@ -33,6 +33,7 @@ export function FindingPanel({
   onDecide,
   onInvestigate,
   onGenerateReview,
+  readOnly,
 }: {
   findings: Finding[];
   selectedId: string | null;
@@ -40,6 +41,7 @@ export function FindingPanel({
   onDecide: (id: string, verdict: "agree" | "dismiss", note?: string) => Promise<void>;
   onInvestigate: (id: string, message: string) => Promise<void>;
   onGenerateReview?: () => void;
+  readOnly?: boolean;
 }) {
   const [filter, setFilter] = React.useState<FilterKey>("open");
   const [sort, setSort] = React.useState<SortKey>("severity");
@@ -207,6 +209,7 @@ export function FindingPanel({
                     ? { mode: command.mode, v: command.v }
                     : undefined
                 }
+                readOnly={readOnly}
               />
             ))}
           </AnimatePresence>

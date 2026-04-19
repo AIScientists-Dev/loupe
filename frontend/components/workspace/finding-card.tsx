@@ -29,6 +29,8 @@ export type FindingCardProps = {
   onInvestigate: (message: string) => Promise<void>;
   /** Keyed imperative signal: when `v` changes, open the given mode. */
   commandSignal?: { mode: "agree" | "dismiss" | "investigate"; v: number };
+  /** When true, hide all action affordances — used on /share/:id. */
+  readOnly?: boolean;
 };
 
 export function FindingCard(props: FindingCardProps) {
@@ -135,7 +137,11 @@ export function FindingCard(props: FindingCardProps) {
             <Formula tex={finding.evidence_quote} />
           </blockquote>
 
-          {decided ? (
+          {props.readOnly ? (
+            finding.decision ? (
+              <DecidedFooter finding={finding} onReopen={() => {}} busy={false} readOnly />
+            ) : null
+          ) : decided ? (
             <DecidedFooter
               finding={finding}
               onReopen={() => setEditing(true)}
@@ -277,10 +283,12 @@ function DecidedFooter({
   finding,
   onReopen,
   busy,
+  readOnly,
 }: {
   finding: Finding;
   onReopen: () => void;
   busy: boolean;
+  readOnly?: boolean;
 }) {
   return (
     <motion.div
@@ -304,7 +312,7 @@ function DecidedFooter({
           </span>
         )}
       </div>
-      <Button
+      {!readOnly && <Button
         size="sm"
         variant="ghost"
         onClick={(e) => {
@@ -314,7 +322,7 @@ function DecidedFooter({
         disabled={busy}
       >
         <Undo2 className="size-3.5" /> Change
-      </Button>
+      </Button>}
     </motion.div>
   );
 }

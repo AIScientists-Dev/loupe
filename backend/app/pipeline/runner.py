@@ -33,12 +33,13 @@ from app.models import (
     SegmentClassification,
     SegmentStatus,
 )
+from app.pipeline.steps.build_digest import build_digest
 from app.pipeline.steps.extract_proofs import extract_proofs_from_markdown
 from app.pipeline.steps.localize import localize_findings_on_page
 from app.pipeline.steps.outline import extract_outline
 from app.pipeline.steps.parse import extract_title_from, parse_page_range
 from app.pipeline.steps.plan_segments import plan_segments
-from app.pipeline.steps.verify_proofs import verify_block_against_context
+from app.pipeline.steps.verify_proofs import verify_blocks_batched
 from app.services.events import bus
 from app.services.llm_client import LLMClient, usage_tracker
 from app.services.mineru_client import MinerUClient
@@ -87,6 +88,7 @@ def _save_merging_other_segments(store: FileStore, in_mem: Paper) -> None:
     disk.page_count = in_mem.page_count or disk.page_count
     disk.updated_at = in_mem.updated_at
     disk.pricing_snapshot = in_mem.pricing_snapshot or disk.pricing_snapshot
+    disk.stable_digest = in_mem.stable_digest or disk.stable_digest
 
     # Segment-list merge:
     #   - If disk has fewer segments than in_mem (e.g. runner just planned),
@@ -139,6 +141,9 @@ async def run_planning(paper: Paper, store: FileStore, llm: LLMClient) -> None:
             seg.status = SegmentStatus.skipped
 
     paper.segments = segments
+    # Build the stable context digest up front so verify_proofs can use it
+    # as the cacheable prompt block (saves ~70% of LLM cost on long papers).
+    paper.stable_digest = build_digest(paper, pdf_bytes)
     paper.run_state = RunState.running
     paper.updated_at = _now()
     _save_merging_other_segments(store, paper)
@@ -303,12 +308,16 @@ async def _process_segment(
         "proof_blocks_count": len(new_blocks),
     })
 
-    # -- verify ----------------------------------------------------------
+    # -- verify (batched: one LLM call for the whole segment) ----------
     seg.status = SegmentStatus.verifying
     _save_merging_other_segments(store, paper)
-    for block in new_blocks:
+    if new_blocks:
         cost_before = usage_tracker.cost_usd
-        findings = await verify_block_against_context(block, paper.markdown, llm)
+        findings = await verify_blocks_batched(
+            new_blocks,
+            paper.stable_digest or paper.markdown,
+            llm,
+        )
         seg.llm_cost_usd += usage_tracker.cost_usd - cost_before
         for f in findings:
             paper.findings.append(f)
