@@ -71,6 +71,7 @@ export default function SharedPaperPage({
         ) : (
           <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(420px,460px)]">
             <PdfViewer
+              paperId={paper.id}
               paperTitle={paper.title}
               findings={paper.findings}
               selectedFindingId={selectedId}

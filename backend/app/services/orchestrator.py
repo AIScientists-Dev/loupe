@@ -223,26 +223,6 @@ class Orchestrator:
         )
 
 
-def _estimate_remaining(paper: Paper) -> float:
-    from app.models import SegmentClassification
-    per_page = {
-        SegmentClassification.proof: 0.04,
-        SegmentClassification.theorem: 0.03,
-        SegmentClassification.background: 0.01,
-        SegmentClassification.experiment: 0.01,
-        SegmentClassification.figures: 0.0,
-        SegmentClassification.other: 0.01,
-    }
-    total = 0.0
-    for s in paper.segments:
-        if s.status in (SegmentStatus.done, SegmentStatus.skipped, SegmentStatus.failed, SegmentStatus.stopped):
-            continue
-        if s.priority <= 0:
-            continue
-        pages = s.page_end - s.page_start + 1
-        total += pages * per_page.get(s.classification, 0.01)
-    return total
-
     # -- localize -------------------------------------------------------------
 
     async def localize_one(self, paper_id: str, finding_id: str) -> Optional[Finding]:
@@ -418,6 +398,27 @@ def _find_block(paper: Paper, proof_block_id: str) -> Optional[ProofBlock]:
         if b.proof_block_id == proof_block_id:
             return b
     return None
+
+
+def _estimate_remaining(paper: Paper) -> float:
+    from app.models import SegmentClassification
+    per_page = {
+        SegmentClassification.proof: 0.04,
+        SegmentClassification.theorem: 0.03,
+        SegmentClassification.background: 0.01,
+        SegmentClassification.experiment: 0.01,
+        SegmentClassification.figures: 0.0,
+        SegmentClassification.other: 0.01,
+    }
+    total = 0.0
+    for s in paper.segments:
+        if s.status in (SegmentStatus.done, SegmentStatus.skipped, SegmentStatus.failed, SegmentStatus.stopped):
+            continue
+        if s.priority <= 0:
+            continue
+        pages = s.page_end - s.page_start + 1
+        total += pages * per_page.get(s.classification, 0.01)
+    return total
 
 
 _INVESTIGATE_SYSTEM = """You are helping a domain-expert reviewer dig deeper into a specific finding we flagged in a paper's proof. Respond conversationally, concisely, and with rigor. You may re-derive steps, propose counterexamples, check alternative formulations, or concede that the original finding was wrong if the user's argument is persuasive.

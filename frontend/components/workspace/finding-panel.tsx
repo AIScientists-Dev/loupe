@@ -164,17 +164,17 @@ export function FindingPanel({
 
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-background">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-border px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-1">
           <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
-            <TabsList>
-              <TabsTrigger value="open">
+            <TabsList className="h-8 p-0.5">
+              <TabsTrigger value="open" className="px-2 py-0.5 text-[11px]">
                 Open <CountPill n={counts.open} />
               </TabsTrigger>
-              <TabsTrigger value="agreed">
+              <TabsTrigger value="agreed" className="px-2 py-0.5 text-[11px]">
                 Agreed <CountPill n={counts.agreed} />
               </TabsTrigger>
-              <TabsTrigger value="dismissed">
+              <TabsTrigger value="dismissed" className="px-2 py-0.5 text-[11px]">
                 Dismissed <CountPill n={counts.dismissed} />
               </TabsTrigger>
             </TabsList>
@@ -186,7 +186,7 @@ export function FindingPanel({
           />
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <SortDropdown value={sort} onChange={setSort} />
         </div>
       </div>
@@ -315,10 +315,10 @@ function SortDropdown({
       variant="ghost"
       size="sm"
       onClick={() => onChange(next)}
-      className="gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+      className="h-7 shrink-0 gap-1 whitespace-nowrap px-2 text-[11px] text-muted-foreground hover:text-foreground"
     >
       <SortAsc className="size-3" />
-      Sort: {labels[value]}
+      {labels[value]}
     </Button>
   );
 }

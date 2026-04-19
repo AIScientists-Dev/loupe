@@ -74,8 +74,9 @@ export function Workspace({ paper }: { paper: Paper }) {
 
   return (
     <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
-      <div className="grid min-h-0 w-full flex-1 grid-cols-[minmax(0,1fr)_minmax(420px,460px)] overflow-hidden">
+      <div className="grid min-h-0 w-full flex-1 grid-cols-[minmax(0,1fr)_minmax(420px,460px)] grid-rows-[minmax(0,1fr)] overflow-hidden">
       <PdfViewer
+        paperId={paper.id}
         paperTitle={paper.title}
         findings={paper.findings}
         selectedFindingId={selectedId}

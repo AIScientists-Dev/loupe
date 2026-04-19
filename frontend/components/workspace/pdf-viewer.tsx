@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { Document, Page, Thumbnail, pdfjs } from "react-pdf";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
 import {
   ChevronLeft,
   ChevronRight,
@@ -10,19 +13,29 @@ import {
   Maximize2,
   Ruler,
   FileText,
+  Loader2,
+  PanelLeft,
+  PanelLeftClose,
+  SkipForward,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Formula, MathText } from "./math";
-import { PageStrip } from "./page-strip";
+import { api } from "@/lib/api";
 import type { Finding, Segment } from "@/lib/types";
 
-const PAGE_W = 612; // PDF points, US letter
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+const PAGE_W = 612;
 const PAGE_H = 792;
-const DEFAULT_PAGES = 5;
+const THUMB_MIN = 80;
+const THUMB_MAX = 220;
+const THUMB_DEFAULT = 120;
+const THUMBS_KEY = "loupe.thumbs.open";
+const THUMB_SIZE_KEY = "loupe.thumbs.size";
 
 export function PdfViewer({
+  paperId,
   paperTitle,
   findings,
   selectedFindingId,
@@ -30,6 +43,7 @@ export function PdfViewer({
   totalPages,
   onSkipSegment,
 }: {
+  paperId: string;
   paperTitle: string;
   findings: Finding[];
   segments?: Segment[];
@@ -37,25 +51,62 @@ export function PdfViewer({
   selectedFindingId: string | null;
   onSkipSegment?: (segmentId: string) => void;
 }) {
-  const [zoom, setZoom] = React.useState(0.95);
+  const [zoom, setZoom] = React.useState(1);
   const [currentPage, setCurrentPage] = React.useState(1);
+  const [numPages, setNumPages] = React.useState<number | null>(totalPages ?? null);
+  const [pageSizes, setPageSizes] = React.useState<
+    Record<number, { width: number; height: number }>
+  >({});
+  const [thumbsOpen, setThumbsOpen] = React.useState(false);
+  const [thumbSize, setThumbSize] = React.useState(THUMB_DEFAULT);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const pageRefs = React.useRef<Array<HTMLDivElement | null>>([]);
 
-  // Scroll + briefly highlight when a finding is selected.
+  React.useEffect(() => {
+    try {
+      const open = localStorage.getItem(THUMBS_KEY);
+      if (open === "1") setThumbsOpen(true);
+      const size = Number(localStorage.getItem(THUMB_SIZE_KEY));
+      if (size >= THUMB_MIN && size <= THUMB_MAX) setThumbSize(size);
+    } catch {}
+  }, []);
+
+  const pdfUrl = React.useMemo(() => api.pdfUrl(paperId), [paperId]);
+
+  const pageCount = numPages ?? totalPages ?? 0;
+
   const selected = findings.find((f) => f.id === selectedFindingId);
   React.useEffect(() => {
-    if (!selected || !selected.bbox_page) return;
-    const target = pageRefs.current[selected.bbox_page - 1];
-    if (target && containerRef.current) {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-      setCurrentPage(selected.bbox_page);
+    if (!selected) return;
+    const pg = selected.bbox?.page ?? selected.bbox_page;
+    if (!pg) return;
+    const root = containerRef.current;
+    const target = pageRefs.current[pg - 1];
+    if (!root || !target) return;
+    // offsetTop walks to the nearest positioned ancestor, which isn't
+    // always the scroll container. Use viewport rects instead.
+    const rootRect = root.getBoundingClientRect();
+    const pageRect = target.getBoundingClientRect();
+    const pageTopInScroll = pageRect.top - rootRect.top + root.scrollTop;
+    let scrollTo = pageTopInScroll;
+    // If we have the bbox and page dimensions, scroll so the bbox sits
+    // near the top of the viewport (with a small header margin) — not the
+    // top of the page. This is what "navigate to the box" actually means.
+    if (selected.bbox) {
+      const size = pageSizes[pg];
+      if (size && size.width > 0) {
+        const scale = target.clientWidth / size.width;
+        const cssTop = (size.height - selected.bbox.y - selected.bbox.height) * scale;
+        scrollTo = pageTopInScroll + cssTop - 96;
+      }
     }
-  }, [selectedFindingId, selected]);
+    root.scrollTo({ top: Math.max(0, scrollTo), behavior: "smooth" });
+    setCurrentPage(pg);
+  }, [selectedFindingId, pageSizes]);
 
   React.useEffect(() => {
     const root = containerRef.current;
-    if (!root) return;
+    if (!root || pageCount === 0) return;
     const observer = new IntersectionObserver(
       (entries) => {
         const visible = entries
@@ -66,13 +117,11 @@ export function PdfViewer({
           if (pg) setCurrentPage(pg);
         }
       },
-      { root, threshold: [0.2, 0.5, 0.8] }
+      { root, threshold: [0.1, 0.25, 0.5, 0.75] }
     );
     pageRefs.current.forEach((el) => el && observer.observe(el));
     return () => observer.disconnect();
-  }, []);
-
-  const pageCount = totalPages ?? DEFAULT_PAGES;
+  }, [pageCount]);
 
   const jump = (dir: 1 | -1) => {
     const next = Math.min(pageCount, Math.max(1, currentPage + dir));
@@ -95,11 +144,37 @@ export function PdfViewer({
   const findingsByPage = React.useMemo(() => {
     const m: Record<number, Finding[]> = {};
     for (const f of findings) {
-      const p = f.bbox_page ?? 1;
+      const p = f.bbox?.page ?? f.bbox_page ?? null;
+      if (p == null) continue;
       (m[p] ??= []).push(f);
     }
     return m;
   }, [findings]);
+
+  const pendingSegments = React.useMemo(
+    () => (segments ?? []).filter((s) => s.status === "pending"),
+    [segments]
+  );
+
+  const baseWidth = PAGE_W * zoom;
+
+  const toggleThumbs = () => {
+    setThumbsOpen((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(THUMBS_KEY, next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  };
+
+  const updateThumbSize = (n: number) => {
+    const clamped = Math.min(THUMB_MAX, Math.max(THUMB_MIN, n));
+    setThumbSize(clamped);
+    try {
+      localStorage.setItem(THUMB_SIZE_KEY, String(clamped));
+    } catch {}
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/30">
@@ -110,115 +185,209 @@ export function PdfViewer({
         zoom={zoom}
         onZoom={setZoom}
         onJump={jump}
+        thumbsOpen={thumbsOpen}
+        onToggleThumbs={toggleThumbs}
       />
-      <PageStrip
-        totalPages={pageCount}
-        segments={segments}
-        findings={findings}
-        currentPage={currentPage}
-        onPageClick={jumpToPage}
-        onSkipSegment={onSkipSegment}
-      />
-      <div
-        ref={containerRef}
-        className="min-h-0 flex-1 overflow-y-auto px-6 py-6"
-      >
-        <div
-          className="mx-auto flex flex-col items-center gap-6"
-          style={{ width: PAGE_W * zoom }}
-        >
-          {Array.from({ length: pageCount }).map((_, i) => (
-            <PdfPage
-              key={i}
-              ref={(el) => {
-                pageRefs.current[i] = el;
-              }}
-              page={i + 1}
-              zoom={zoom}
-              paperTitle={paperTitle}
-              isPlanted={paperTitle === "Sharp Concentration for a Telescoped Estimator"}
-              findings={findingsByPage[i + 1] ?? []}
-              selectedFindingId={selectedFindingId}
-            />
-          ))}
+      {onSkipSegment && pendingSegments.length > 0 && (
+        <div className="flex items-center gap-2 border-b border-border/60 bg-background/50 px-4 py-1.5 text-[11px]">
+          <span className="shrink-0 font-semibold uppercase tracking-wider text-muted-foreground">
+            Skip
+          </span>
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            {pendingSegments.map((seg) => (
+              <button
+                key={seg.segment_id}
+                onClick={() => onSkipSegment(seg.segment_id)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                title={`Don't analyze ${seg.label} (pages ${seg.page_start}–${seg.page_end})`}
+              >
+                <SkipForward className="size-3" />
+                {seg.label} · p.{seg.page_start}–{seg.page_end}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+      <Document
+        file={pdfUrl}
+        onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+        loading={
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 size-4 animate-spin" /> Loading PDF…
+          </div>
+        }
+        error={
+          <div className="mx-auto mt-10 max-w-md rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+            Could not load PDF. The backend may not yet have the file available.
+          </div>
+        }
+        className="flex min-h-0 flex-1"
+      >
+        <AnimatePresence initial={false}>
+          {thumbsOpen && pageCount > 0 && (
+            // Framer animates only the open/close (opacity) — width tracks
+            // thumbSize directly via inline style so the slider feels
+            // monotone instead of re-triggering a 0.2s animation per tick.
+            <motion.aside
+              key="thumbs"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              style={{ width: thumbSize + 48 }}
+              className="relative flex shrink-0 flex-col overflow-hidden border-r border-border bg-background/70"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+                <span className="font-semibold uppercase tracking-wider">
+                  Pages
+                </span>
+                <input
+                  type="range"
+                  min={THUMB_MIN}
+                  max={THUMB_MAX}
+                  value={thumbSize}
+                  onChange={(e) => updateThumbSize(Number(e.target.value))}
+                  className="h-1 w-20 cursor-pointer accent-primary"
+                  aria-label="Thumbnail size"
+                />
+              </div>
+              <div className="flex-1 overflow-y-auto px-3 py-3">
+                <div className="flex flex-col items-center gap-3">
+                  {Array.from({ length: pageCount }).map((_, i) => {
+                    const pageNum = i + 1;
+                    const hasFinding = (findingsByPage[pageNum]?.length ?? 0) > 0;
+                    const active = pageNum === currentPage;
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => jumpToPage(pageNum)}
+                        className={cn(
+                          "group flex flex-col items-center gap-1 rounded-md p-1 transition-colors",
+                          active
+                            ? "bg-primary/10 ring-2 ring-primary/60"
+                            : "hover:bg-muted"
+                        )}
+                        aria-label={`Page ${pageNum}`}
+                      >
+                        <div
+                          className={cn(
+                            "relative overflow-hidden rounded-sm border bg-white shadow-sm",
+                            active ? "border-primary" : "border-border/70"
+                          )}
+                          style={{ width: thumbSize }}
+                        >
+                          <Thumbnail
+                            pageNumber={pageNum}
+                            width={thumbSize}
+                            loading={
+                              <div
+                                className="flex items-center justify-center bg-muted"
+                                style={{ width: thumbSize, height: thumbSize * 1.29 }}
+                              />
+                            }
+                          />
+                          {hasFinding && (
+                            <span
+                              className="absolute right-1 top-1 size-2 rounded-full bg-severity-high"
+                              aria-hidden
+                            />
+                          )}
+                        </div>
+                        <span
+                          className={cn(
+                            "text-[10px] tabular-nums",
+                            active ? "font-semibold text-foreground" : "text-muted-foreground"
+                          )}
+                        >
+                          {pageNum}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+        <div
+          ref={containerRef}
+          className="min-h-0 flex-1 overflow-y-auto bg-neutral-100 px-6 py-6 dark:bg-neutral-900"
+        >
+          <div className="mx-auto flex flex-col items-center gap-6">
+            {pageCount > 0 &&
+              Array.from({ length: pageCount }).map((_, i) => {
+                const pageNum = i + 1;
+                const size = pageSizes[pageNum] ?? { width: PAGE_W, height: PAGE_H };
+                const renderW = baseWidth;
+                const scale = renderW / size.width;
+                return (
+                  <div
+                    key={pageNum}
+                    ref={(el) => {
+                      pageRefs.current[i] = el;
+                    }}
+                    data-page={pageNum}
+                    className="relative overflow-hidden rounded-sm bg-white shadow-md"
+                    style={{ width: renderW }}
+                  >
+                    <Page
+                      pageNumber={pageNum}
+                      width={renderW}
+                      renderTextLayer={false}
+                      renderAnnotationLayer={false}
+                      onLoadSuccess={(p) => {
+                        const w = p.originalWidth ?? p.width;
+                        const h = p.originalHeight ?? p.height;
+                        setPageSizes((prev) =>
+                          prev[pageNum]?.width === w
+                            ? prev
+                            : { ...prev, [pageNum]: { width: w, height: h } }
+                        );
+                      }}
+                    />
+                    <div
+                      className="pointer-events-none absolute inset-0"
+                      style={{
+                        transform: `scale(${scale})`,
+                        transformOrigin: "top left",
+                        width: size.width,
+                        height: size.height,
+                      }}
+                    >
+                      {(findingsByPage[pageNum] ?? []).map((f) => (
+                        <EvidenceCallout
+                          key={f.id}
+                          finding={f}
+                          pageHeight={size.height}
+                          active={selectedFindingId === f.id}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      </Document>
     </div>
   );
 }
 
-const PdfPage = React.forwardRef<
-  HTMLDivElement,
-  {
-    page: number;
-    zoom: number;
-    paperTitle: string;
-    isPlanted: boolean;
-    findings: Finding[];
-    selectedFindingId: string | null;
-  }
->(({ page, zoom, paperTitle, isPlanted, findings, selectedFindingId }, ref) => {
-  return (
-    <div
-      ref={ref}
-      data-page={page}
-      className="relative overflow-hidden rounded-sm border border-border bg-white text-black shadow-md"
-      style={{
-        width: PAGE_W * zoom,
-        height: PAGE_H * zoom,
-      }}
-    >
-      <div
-        className="absolute inset-0"
-        style={{
-          transform: `scale(${zoom})`,
-          transformOrigin: "top left",
-          width: PAGE_W,
-          height: PAGE_H,
-        }}
-      >
-        <div className="px-16 pt-10 pb-6 font-serif text-[9.5pt] leading-snug text-neutral-500">
-          {paperTitle}
-          <span className="float-right">{page}</span>
-        </div>
-        <div className="px-16 pt-1 font-serif text-[10.5pt] leading-relaxed text-neutral-900">
-          {isPlanted ? (
-            <SyntheticPageContent page={page} />
-          ) : (
-            <BlankPagePlaceholder paperTitle={paperTitle} page={page} />
-          )}
-        </div>
-
-        {findings.map((f) => (
-          <EvidenceCallout
-            key={f.id}
-            finding={f}
-            active={selectedFindingId === f.id}
-          />
-        ))}
-      </div>
-    </div>
-  );
-});
-PdfPage.displayName = "PdfPage";
-
-/**
- * Renders a finding's evidence quote AT its bbox coordinates, styled as
- * paper body text. The surrounding box is the severity-colored highlight.
- * This way the bbox is never visually empty — it always contains the
- * quoted text it refers to.
- */
 function EvidenceCallout({
   finding,
+  pageHeight,
   active,
 }: {
   finding: Finding;
+  pageHeight: number;
   active: boolean;
 }) {
   if (!finding.bbox) return null;
   if (finding.localize_status === "dropped") return null;
 
   const { x, y, width, height } = finding.bbox;
+  // PDF-native bbox origin is bottom-left; CSS is top-left. Convert Y.
+  const cssTop = Math.max(0, pageHeight - y - height);
   const pending = finding.localize_status === "pending";
   const severityVar = `var(--severity-${finding.severity})`;
 
@@ -230,32 +399,21 @@ function EvidenceCallout({
         scale: active ? 1.01 : 1,
       }}
       transition={{ duration: 0.2 }}
-      className={cn(
-        "absolute rounded-sm font-serif text-[10.5pt] leading-relaxed text-neutral-900",
-        "flex items-center"
-      )}
+      className={cn("absolute rounded-sm", active && "pointer-events-auto")}
       style={{
         left: x,
-        top: y,
+        top: cssTop,
         width,
         minHeight: height,
-        padding: "6px 10px",
         border: `${active ? 2.5 : 2}px ${pending ? "dashed" : "solid"} ${severityVar}`,
         backgroundColor: active
-          ? "rgba(247, 215, 82, 0.55)"
-          : "rgba(247, 215, 82, 0.32)",
+          ? "rgba(247, 215, 82, 0.35)"
+          : "rgba(247, 215, 82, 0.18)",
         boxShadow: active
           ? `0 0 0 3px color-mix(in oklch, ${severityVar} 22%, transparent)`
           : undefined,
       }}
     >
-      <span className="block w-full overflow-hidden">
-        {finding.evidence_quote.includes("$") ? (
-          <MathText text={finding.evidence_quote} />
-        ) : (
-          <Formula tex={finding.evidence_quote} />
-        )}
-      </span>
       {active && (
         <motion.span
           initial={{ opacity: 0.5, scale: 1 }}
@@ -276,6 +434,8 @@ function PdfToolbar({
   zoom,
   onZoom,
   onJump,
+  thumbsOpen,
+  onToggleThumbs,
 }: {
   title: string;
   page: number;
@@ -283,11 +443,26 @@ function PdfToolbar({
   zoom: number;
   onZoom: (z: number) => void;
   onJump: (dir: 1 | -1) => void;
+  thumbsOpen: boolean;
+  onToggleThumbs: () => void;
 }) {
   return (
-    <div className="flex h-11 shrink-0 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur">
-      <div className="flex items-center gap-1.5 truncate">
-        <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+    <div className="flex h-11 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
+      <div className="flex items-center gap-1 truncate">
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          onClick={onToggleThumbs}
+          aria-label={thumbsOpen ? "Hide page thumbnails" : "Show page thumbnails"}
+          aria-pressed={thumbsOpen}
+        >
+          {thumbsOpen ? (
+            <PanelLeftClose className="size-3.5" />
+          ) : (
+            <PanelLeft className="size-3.5" />
+          )}
+        </Button>
+        <FileText className="ml-1 size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate text-xs text-muted-foreground">{title}</span>
       </div>
       <div className="flex items-center gap-1">
@@ -300,7 +475,7 @@ function PdfToolbar({
           <ChevronLeft className="size-3.5" />
         </Button>
         <span className="min-w-[3rem] text-center text-xs tabular-nums">
-          {page} / {totalPages}
+          {page} / {totalPages || "…"}
         </span>
         <Button
           size="icon-xs"
@@ -333,167 +508,15 @@ function PdfToolbar({
         <Button
           size="icon-xs"
           variant="ghost"
-          onClick={() => onZoom(0.95)}
+          onClick={() => onZoom(1)}
           aria-label="Fit width"
         >
           <Maximize2 className="size-3.5" />
         </Button>
       </div>
       <div className="hidden items-center gap-1.5 text-[11px] text-muted-foreground md:flex">
-        <Ruler className="size-3" /> synthetic preview
+        <Ruler className="size-3" /> PDF preview
       </div>
-    </div>
-  );
-}
-
-/**
- * Blank-page placeholder used when the uploaded paper isn't the hand-crafted
- * demo. Synthetic prose wouldn't match real bboxes, so we render a clean
- * page with the actual title on page 1 and just a page number on others.
- */
-function BlankPagePlaceholder({
-  paperTitle,
-  page,
-}: {
-  paperTitle: string;
-  page: number;
-}) {
-  if (page === 1) {
-    return (
-      <div className="flex h-full flex-col items-center justify-start pt-24 text-center">
-        <h1 className="max-w-md font-serif text-[15pt] font-semibold leading-tight">
-          {paperTitle}
-        </h1>
-        <div className="mt-2 text-[10pt] text-neutral-500">
-          PDF preview not yet rendered — findings below are flagged at their
-          original bbox positions.
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="flex h-full items-center justify-center text-[10pt] text-neutral-400">
-      Page {page}
-    </div>
-  );
-}
-
-/**
- * Synthetic page body — prose surrounding the findings. Evidence quotes
- * (the actual flagged formulas) are rendered separately via EvidenceCallout
- * at bbox coordinates, so the bbox is never empty.
- */
-function SyntheticPageContent({ page }: { page: number }) {
-  if (page === 1) {
-    return (
-      <div className="space-y-3 text-center">
-        <div className="pt-10" />
-        <h1 className="font-serif text-[16pt] font-semibold leading-tight">
-          Sharp Concentration for a Telescoped Estimator
-        </h1>
-        <div className="text-[10pt] text-neutral-600">
-          Anonymous · Submitted for peer review
-        </div>
-        <div className="pt-6 text-left">
-          <h3 className="font-serif text-[11pt] font-semibold">Abstract</h3>
-          <p className="mt-1 text-justify text-[10pt] leading-relaxed">
-            We study the concentration of a telescoped estimator under bounded
-            i.i.d. sampling. The main theorem establishes a sub-Gaussian tail
-            with an explicit constant. Section 3 extends the argument to
-            martingale differences, and Corollary 1 derives a consistency
-            statement. Our contribution is a sharper constant than previously
-            known, obtained via a careful bound on the variance term.
-          </p>
-          <h3 className="mt-5 font-serif text-[11pt] font-semibold">
-            1. Introduction
-          </h3>
-          <p className="mt-1 text-justify text-[10pt] leading-relaxed text-neutral-700">
-            The study of concentration inequalities has a long history in
-            probability theory and its statistical applications. Hoeffding&apos;s
-            inequality and its refinements provide tools for bounding sample
-            averages, while martingale techniques extend these results to
-            dependent data. In this note we revisit a classical telescoping
-            argument and sharpen the resulting bound.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const prose: Record<number, Array<{ head?: string; statement?: string; text?: string }>> = {
-    2: [
-      {
-        head: "Lemma 1.",
-        statement:
-          "For all integers $n \\ge 1$, the telescoping sum satisfies the identity stated below.",
-      },
-      {
-        text: "The proof proceeds by induction. The base case $n = 1$ is immediate. Assuming the claim for $n - 1$, we add the $n$-th term and collect terms, which yields the stated form.",
-      },
-      {
-        head: "Remark 1.",
-        statement:
-          "The closed form extends naturally to weighted partial sums; see Remark 3 for the variance-weighted variant.",
-      },
-    ],
-    3: [
-      {
-        head: "Theorem 1.",
-        statement:
-          "Let $\\{X_i\\}_{i=1}^{n}$ be i.i.d. with mean zero and bounded support. Define $T_n = \\sum_{i=1}^{n} X_i / \\sqrt{n}$. The following bound holds under the stated assumptions.",
-      },
-      {
-        text: "Proof. We apply the telescoping identity of Lemma 1 together with a second-moment bound on the summands.",
-      },
-      {
-        text: "The remainder follows by a standard Chebyshev argument and an application of optional stopping.",
-      },
-    ],
-    4: [
-      {
-        head: "Lemma 2 (concentration).",
-        statement:
-          "Let $X_1,\\dots,X_n$ be i.i.d. bounded in $[0,1]$ with mean $\\mu$. Then for any $\\varepsilon > 0$, the following tail bound holds.",
-      },
-      {
-        text: "The proof adapts the moment generating function argument of Hoeffding (1963). We verify the sub-Gaussian condition via a uniform bound on the cumulant function and then apply Markov's inequality.",
-      },
-    ],
-    5: [
-      {
-        head: "Corollary 1 (consistency).",
-        statement:
-          "Under the hypotheses of Theorem 1, the sequence $\\{X_n\\}$ converges in probability to $X$.",
-      },
-      {
-        text: "The conclusion follows by combining Lemma 2 with a union bound across the dyadic scales.",
-      },
-      {
-        text: "This result will be used in Section 4 to establish the asymptotic normality of the debiased estimator.",
-      },
-    ],
-  };
-
-  const page_prose = prose[page] ?? [];
-  return (
-    <div className="space-y-4 pt-2">
-      {page_prose.map((p, i) => (
-        <div key={i} className="space-y-1.5">
-          {p.head && (
-            <p>
-              <strong className="font-semibold">{p.head}</strong>{" "}
-              <em className="italic text-neutral-700">
-                <MathText text={p.statement ?? ""} />
-              </em>
-            </p>
-          )}
-          {p.text && (
-            <p className="text-justify leading-relaxed">
-              <MathText text={p.text} />
-            </p>
-          )}
-        </div>
-      ))}
     </div>
   );
 }

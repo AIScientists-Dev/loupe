@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { Formula, MathText } from "./math";
+import { MathMarkdown } from "./math";
 import { ISSUE_META, SEVERITY_META } from "./issue-type";
 import { IssueIcon } from "./issue-icon";
 import { InfoTrigger } from "@/components/glossary/info-trigger";
@@ -124,18 +124,18 @@ export function FindingCard(props: FindingCardProps) {
             </span>
             <span className="text-muted-foreground">·</span>
             <span className="text-muted-foreground">
-              p.{finding.bbox_page ?? "?"}
+              p.{finding.bbox?.page ?? finding.bbox_page ?? "?"}
             </span>
             <LocalizeBadge status={finding.localize_status} />
           </div>
 
-          <p className="mt-2 text-sm leading-relaxed text-foreground">
-            <MathText text={finding.description} />
-          </p>
+          <div className="mt-2 text-sm leading-relaxed text-foreground">
+            <MathMarkdown inline>{finding.description}</MathMarkdown>
+          </div>
 
-          <blockquote className="mt-2.5 overflow-x-auto rounded-md border border-border/80 bg-muted/40 px-3 py-2 font-serif text-[13px] leading-relaxed text-foreground/85">
-            <Formula tex={finding.evidence_quote} />
-          </blockquote>
+          <div className="mt-2.5 overflow-x-auto rounded-md border border-border/80 bg-muted/40 px-3 py-2 font-serif text-[13px] leading-relaxed text-foreground/85">
+            <MathMarkdown inline>{finding.evidence_quote}</MathMarkdown>
+          </div>
 
           {props.readOnly ? (
             finding.decision ? (
@@ -216,8 +216,8 @@ export function FindingCard(props: FindingCardProps) {
                     onChange={(e) => setNote(e.target.value)}
                     placeholder={
                       mode === "agree"
-                        ? "Optional: a one-line note the author will see."
-                        : "Optional: why you're dismissing this finding."
+                        ? "Optional — add a note to include in the generated review."
+                        : "Optional — why you're dismissing this finding (used to refine future analysis)."
                     }
                     className="min-h-[64px] text-sm"
                   />
@@ -422,7 +422,7 @@ function ExchangeThread({ exchanges }: { exchanges: Finding["exchanges"] }) {
             {x.role === "user" ? "You" : "Loupe"}
           </div>
           <div className="text-[13px] leading-relaxed text-foreground/90">
-            <MathText text={x.text} />
+            <MathMarkdown inline>{x.text}</MathMarkdown>
           </div>
         </div>
       ))}
