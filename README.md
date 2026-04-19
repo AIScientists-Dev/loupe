@@ -200,6 +200,36 @@ Loupe is new and the backend is moving fast. The best way to help right now:
 
 Please open an issue before sending a PR for anything larger than a bug fix.
 
+### End-to-end test workflow (before merging UI changes)
+
+There's a Playwright-based user-journey script at `e2e/journey.mjs` (the `e2e/` directory itself is gitignored because it contains per-run screenshots, video, and logs). It exercises the full flow — upload or open paper → toolbar (thumbs, pinch-zoom, fullscreen) → per-finding interactions (agree-with-note, dismiss-with-note, investigate, keyboard-A, reopen + change-decision) → bulk decide remaining findings via API → generate-review (real backend call) → filter tabs — and verifies state against the backend, not just the DOM.
+
+One-time setup:
+
+```bash
+cd e2e
+ln -sfn ../frontend/node_modules ./node_modules   # reuse frontend's playwright
+printf '{"name":"loupe-e2e","private":true,"type":"module"}\n' > package.json
+```
+
+Run the harness (backend on `:8010` and frontend on `:3009` must be up):
+
+```bash
+cd frontend && node ../e2e/journey.mjs            # fast path (~60s)
+cd frontend && SLOW=1 node ../e2e/journey.mjs     # also covers upload (~20 min)
+cd frontend && HEADED=1 node ../e2e/journey.mjs   # watch it live in a real browser
+cd frontend && RESET=0 node ../e2e/journey.mjs    # don't reset paper decisions
+```
+
+Outputs land in `e2e/runs/<timestamp>/`:
+
+- `FRONTEND_ISSUES.md` — severity-ranked list of bugs the harness noticed (pageerrors, 4xx/5xx responses, missing selectors, unpersisted state)
+- `screenshots/NN_step.png` — one shot per step (27 by default)
+- `video.webm` — full replay
+- `console.log`, `network.log`, `pageerrors.log` — browser diagnostics
+
+**Reviewer workflow:** before shipping any UI change, run the script, open `FRONTEND_ISSUES.md`, and attach it (or a summary) to the PR. A clean run is `high=0 medium=0 low=0`.
+
 ## Roadmap (not promises)
 
 - SSE streaming for the analysis view
