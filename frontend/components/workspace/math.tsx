@@ -90,6 +90,14 @@ const styleOverrides = `
   display: inline;
   margin: 0;
 }
+/* Broken LaTeX (missing braces, unterminated $...$) should read as plain source,
+ * not as angry red text. Inherit the surrounding text color + strip the border. */
+.math-markdown .katex-error {
+  color: inherit !important;
+  background: transparent !important;
+  border: none !important;
+  font-family: inherit !important;
+}
 `;
 
 export interface MathMarkdownProps {
@@ -118,7 +126,10 @@ export const MathMarkdown = React.memo(function MathMarkdown({
       <style dangerouslySetInnerHTML={{ __html: styleOverrides }} />
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
-        rehypePlugins={[[rehypeKatex, { strict: false }], rehypeMathUnicodeItalic]}
+        rehypePlugins={[
+          [rehypeKatex, { strict: false, errorColor: "inherit", throwOnError: false }],
+          rehypeMathUnicodeItalic,
+        ]}
         components={{
           p: ({ children: c }) =>
             inline ? <span>{c}</span> : <p className="leading-relaxed">{c}</p>,

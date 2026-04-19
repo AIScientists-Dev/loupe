@@ -53,20 +53,26 @@ export function Sidebar() {
         style={{ width: expanded ? FULL_W : RAIL_W }}
       >
         {/* Brand */}
-        <div className="flex h-[68px] shrink-0 items-center px-3">
+        <div
+          className={cn(
+            "flex h-[68px] shrink-0 items-center",
+            expanded ? "px-3" : "justify-center px-0"
+          )}
+        >
           <Link
             href="/papers"
             aria-label="Loupe"
-            className="flex h-10 items-center transition-opacity hover:opacity-80"
+            className={cn(
+              "flex h-10 items-center transition-opacity hover:opacity-80",
+              expanded ? "" : "justify-center"
+            )}
           >
             {expanded ? (
               <span className="pl-2">
                 <LoupeLockup height={32} />
               </span>
             ) : (
-              <span className="grid w-full place-items-center">
-                <LoupeMark size={26} />
-              </span>
+              <LoupeMark size={26} />
             )}
           </Link>
         </div>

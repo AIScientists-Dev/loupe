@@ -37,3 +37,4 @@ data/
 htmlcov/
 cases/
 dev-note.md
+e2e/

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { AnimatePresence } from "framer-motion";
-import { Eye, EyeOff, SortAsc } from "lucide-react";
+import { Eye, EyeOff, SortAsc, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -37,6 +37,7 @@ export function FindingPanel({
   onInvestigate,
   onGenerateReview,
   focusEdit,
+  onClose,
   readOnly,
 }: {
   findings: Finding[];
@@ -46,6 +47,8 @@ export function FindingPanel({
   onInvestigate: (id: string, message: string) => Promise<void>;
   onGenerateReview?: () => void;
   focusEdit?: FocusEditSignal;
+  /** When provided (narrow viewports), a close button renders in the header. */
+  onClose?: () => void;
   readOnly?: boolean;
 }) {
   const [filter, setFilter] = React.useState<FilterKey>("open");
@@ -121,11 +124,26 @@ export function FindingPanel({
     if (!selectedId) return;
     const root = listRef.current;
     if (!root) return;
-    const el = root.querySelector<HTMLElement>(`[data-finding-id="${selectedId}"]`);
-    if (!el) return;
-    const delta = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
-    root.scrollTo({ top: root.scrollTop + delta - 8, behavior: "smooth" });
-  }, [selectedId, visible.length]);
+    // Double rAF: wait one frame for the parent render, a second so the
+    // FindingCard's own commandSignal effect has expanded into editing mode
+    // (which changes the card's height) before we measure and scroll.
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const el = root.querySelector<HTMLElement>(
+          `[data-finding-id="${selectedId}"]`
+        );
+        if (!el) return;
+        const delta =
+          el.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        root.scrollTo({ top: root.scrollTop + delta - 8, behavior: "smooth" });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [selectedId, visible.length, focusEdit?.v]);
 
   // Minimal hotkeys: navigation + glossary. Decision shortcuts were removed —
   // they bypassed the note textarea, which confused the decide flow.
@@ -189,6 +207,16 @@ export function FindingPanel({
 
         <div className="flex shrink-0 items-center gap-1">
           <SortDropdown value={sort} onChange={setSort} />
+          {onClose && (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={onClose}
+              aria-label="Close findings panel"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 

@@ -19,6 +19,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { InfoTrigger } from "@/components/glossary/info-trigger";
+import { api } from "@/lib/api";
 import type { Paper } from "@/lib/types";
 
 const MARKDOWN_COMPONENTS = {
@@ -56,13 +57,28 @@ export function DraftReviewDialog({
 }) {
   const [markdown, setMarkdown] = React.useState("");
   const [isGenerating, setGenerating] = React.useState(false);
+  const [draftId, setDraftId] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   const generate = React.useCallback(async () => {
     setGenerating(true);
-    // Mock: compose a draft from the findings.
-    await new Promise((r) => setTimeout(r, 900));
-    setMarkdown(composeDraftReview(paper));
-    setGenerating(false);
+    setError(null);
+    try {
+      // Real backend call — persists a ReviewDraft on the paper so it can
+      // be reloaded, PATCHed, and exported later.
+      const draft = await api.generateReview(paper.id);
+      setMarkdown(draft.markdown);
+      setDraftId(draft.draft_id);
+    } catch (e) {
+      // Fall back to client-side composition so the user still sees something
+      // if the backend call fails. Surfaces the error on the dialog.
+      const msg = e instanceof Error ? e.message : "Failed to generate review";
+      setError(msg);
+      setMarkdown(composeDraftReview(paper));
+      toast.error("Review generation failed", { description: msg });
+    } finally {
+      setGenerating(false);
+    }
   }, [paper]);
 
   React.useEffect(() => {
