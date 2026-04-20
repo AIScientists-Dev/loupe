@@ -9,7 +9,6 @@ import { toast } from "sonner";
 import { Workspace } from "@/components/workspace/workspace";
 import { StatusBanner } from "@/components/workspace/status-banner";
 import { RunControls } from "@/components/workspace/run-controls";
-import { CostChip } from "@/components/workspace/cost-chip";
 import { SharePaperDialog } from "@/components/papers/share-paper-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -108,7 +107,6 @@ export default function WorkspacePage({
         <div className="flex items-center gap-2">
           {paper && <StatusBanner paper={paper} />}
           {paper && <RunControls paper={paper} />}
-          {paper && <CostChip paper={paper} />}
           {paper && (
             <Button
               variant="outline"
