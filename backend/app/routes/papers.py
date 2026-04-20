@@ -17,6 +17,7 @@ from app.models import (
     PaperStatusResponse,
     PaperSummary,
     PIPELINE_ORDER,
+    PlaceRequest,
     ReviewDraft,
     ReviewPatchRequest,
 )
@@ -268,6 +269,10 @@ def resume_run(
     result = orch.resume(paper_id)
     if result is None:
         raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    # Let the next segment through even if the billed cost is already
+    # past settings.max_budget_usd — user explicitly asked to continue.
+    from app.pipeline.runner import enable_budget_bypass
+    enable_budget_bypass(paper_id)
     # Kick the scheduler off the ASGI event loop.
     background.add_task(orch.run_pipeline_task, paper_id)
     return result
@@ -306,6 +311,32 @@ async def localize_finding_route(
     orch: Orchestrator = Depends(_orch),
 ):
     result = await orch.localize_one(paper_id, finding_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper or finding not found"})
+    return result
+
+
+@router.post("/{paper_id}/findings/{finding_id}/place", response_model=Finding)
+async def place_finding_route(
+    paper_id: str,
+    finding_id: str,
+    req: PlaceRequest,
+    orch: Orchestrator = Depends(_orch),
+):
+    result = await orch.place_finding(paper_id, finding_id, req.page, req.bbox)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper or finding not found"})
+    return result
+
+
+@router.post("/{paper_id}/findings/{finding_id}/verify", response_model=Finding)
+async def verify_finding_route(
+    paper_id: str,
+    finding_id: str,
+    orch: Orchestrator = Depends(_orch),
+):
+    """Tier-4 on-demand vision presence check."""
+    result = await orch.verify_finding(paper_id, finding_id)
     if result is None:
         raise HTTPException(404, detail={"code": "not_found", "message": "Paper or finding not found"})
     return result

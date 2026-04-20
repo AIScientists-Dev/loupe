@@ -41,6 +41,7 @@ from app.pipeline.steps.outline import extract_outline
 from app.pipeline.steps.parse import extract_title_from, parse_page_range
 from app.pipeline.steps.plan_segments import plan_segments
 from app.pipeline.steps.verify_proofs import verify_blocks_batched
+from app.config import settings
 from app.services.events import bus
 from app.services.llm_client import LLMClient, usage_tracker
 from app.services.mineru_client import MinerUClient
@@ -56,6 +57,19 @@ _PROOF_CLASSIFICATIONS = {
     SegmentClassification.proof,
     SegmentClassification.theorem,
 }
+
+# Paper IDs for which the NEXT budget check in run_segments should be
+# skipped. Populated by enable_budget_bypass() when the user resumes a
+# paper that was paused by the cap. One-shot — cleared after a single
+# loop iteration lets the next segment through.
+_budget_bypass: set[str] = set()
+
+
+def enable_budget_bypass(paper_id: str) -> None:
+    """Allow the given paper's next segment to run even if billed cost is
+    already over settings.max_budget_usd. Called from the resume route
+    when the user explicitly chooses to continue past the cap."""
+    _budget_bypass.add(paper_id)
 
 
 def _now() -> str:
@@ -194,6 +208,31 @@ async def run_segments(
         seg = _next_pending(paper)
         if seg is None:
             break
+
+        # Budget cap guardrail — pause before starting the next segment
+        # if the running billed cost has already crossed the cap. Resume
+        # bypasses this check once so the user can opt to continue.
+        if settings.max_budget_usd > 0 and paper_id not in _budget_bypass:
+            running_billed = bill_user(paper.total_cost_raw())
+            if running_billed >= settings.max_budget_usd:
+                logger.info(
+                    "budget cap reached for %s: billed=$%.4f cap=$%.2f",
+                    paper_id, running_billed, settings.max_budget_usd,
+                )
+                _cancel_prefetches(prefetched)
+                paper.run_state = RunState.paused
+                paper.updated_at = _now()
+                _save_merging_other_segments(store, paper)
+                bus.emit(paper_id, "run.budget_exceeded", {
+                    "running_billed_usd": running_billed,
+                    "cap_billed_usd": settings.max_budget_usd,
+                    "segments_remaining": sum(
+                        1 for s in paper.segments
+                        if s.status == SegmentStatus.pending and s.priority > 0
+                    ),
+                })
+                return
+        _budget_bypass.discard(paper_id)
 
         # Use any speculative parse we kicked off in the previous iteration,
         # otherwise start one now for the current segment.

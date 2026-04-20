@@ -47,5 +47,12 @@ class Settings(BaseSettings):
     # named-result citations that warrant external verification.
     verify_enable_web_search: bool = False
 
+    # Hard budget cap per paper in **billed** USD (after markup). When the
+    # running cost crosses this, the scheduler pauses before starting the
+    # next segment, emits `run.budget_exceeded`, and waits for user input.
+    # Resume bypasses the check once so the user can opt to continue past
+    # the cap. Set to 0 to disable the guardrail entirely.
+    max_budget_usd: float = 1.50
+
 
 settings = Settings()
