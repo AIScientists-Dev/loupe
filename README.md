@@ -74,7 +74,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8010
+uvicorn app.main:app --reload --port 8009
 
 # another terminal
 cd frontend
@@ -82,7 +82,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs on `:3009`, backend on `:8010`. Frontend proxies `/api/*` to the backend (see `frontend/next.config.mjs`).
+Frontend runs on `:3009`, backend on `:8009`. Frontend proxies `/api/*` to the backend (see `frontend/next.config.mjs`).
 
 ### Configure providers
 
@@ -212,7 +212,7 @@ ln -sfn ../frontend/node_modules ./node_modules   # reuse frontend's playwright
 printf '{"name":"loupe-e2e","private":true,"type":"module"}\n' > package.json
 ```
 
-Run the harness (backend on `:8010` and frontend on `:3009` must be up):
+Run the harness (backend on `:8009` and frontend on `:3009` must be up):
 
 ```bash
 cd frontend && node ../e2e/journey.mjs            # fast path (~60s)
