@@ -14,12 +14,13 @@ import {
   useDecideFinding,
   useInvestigateFinding,
   usePaperCost,
+  usePlaceFinding,
   useSkipSegment,
   useStopPaper,
 } from "@/lib/hooks/use-papers";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useSettingsDialog } from "@/lib/hooks/use-settings-dialog";
-import type { Paper } from "@/lib/types";
+import type { Bbox, Paper } from "@/lib/types";
 
 // Viewports below this collapse the finding panel into a slide-over drawer.
 const NARROW_BREAKPOINT = 1024;
@@ -58,8 +59,33 @@ export function Workspace({ paper }: { paper: Paper }) {
 
   const decide = useDecideFinding(paper.id);
   const investigate = useInvestigateFinding(paper.id);
+  const place = usePlaceFinding(paper.id);
   const skip = useSkipSegment(paper.id);
   const stop = useStopPaper();
+
+  // Manual-placement mode target. null → off; findingId → crosshair active.
+  const [placementTarget, setPlacementTarget] = React.useState<
+    { findingId: string } | null
+  >(null);
+  const startPlacement = React.useCallback((findingId: string) => {
+    setPlacementTarget({ findingId });
+  }, []);
+  const cancelPlacement = React.useCallback(() => setPlacementTarget(null), []);
+  const commitPlacement = React.useCallback(
+    async (findingId: string, page: number, bbox: Bbox) => {
+      try {
+        await place.mutateAsync({ findingId, page, bbox });
+        toast.success("Box placed");
+      } catch (err) {
+        toast.error("Could not save placement", {
+          description: err instanceof Error ? err.message : undefined,
+        });
+      } finally {
+        setPlacementTarget(null);
+      }
+    },
+    [place]
+  );
   const budgetCap = useSettings((s) => s.defaultBudgetCapUsd);
   const openSettings = useSettingsDialog((s) => s.openDialog);
   const { data: cost } = usePaperCost(paper.id, true);
@@ -134,6 +160,11 @@ export function Workspace({ paper }: { paper: Paper }) {
           });
         }
       }}
+      onRequestPlacement={(id) => {
+        startPlacement(id);
+        setSelectedId(id);
+        if (isNarrow) setPanelOpen(false);
+      }}
       onGenerateReview={() => setReviewOpen(true)}
     />
   );
@@ -157,6 +188,17 @@ export function Workspace({ paper }: { paper: Paper }) {
           totalPages={paper.total_pages}
           onSkipSegment={handleSkip}
           onReopenFinding={handleReopen}
+          placementTarget={placementTarget}
+          onPlaceFinding={commitPlacement}
+          onPlacementCancel={cancelPlacement}
+          onSelectFinding={(id) => {
+            setSelectedId(id);
+            if (isNarrow) setPanelOpen(true);
+          }}
+          onReplacePlacement={(id) => {
+            setSelectedId(id);
+            startPlacement(id);
+          }}
         />
 
         {/* Desktop: inline panel (always visible). */}

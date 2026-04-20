@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
-import type { Decision } from "@/lib/types";
+import type { Bbox, Decision } from "@/lib/types";
 
 export const paperKeys = {
   all: ["papers"] as const,
@@ -118,6 +118,23 @@ export function useInvestigateFinding(paperId: string) {
       findingId: string;
       message: string;
     }) => api.investigateFinding(paperId, findingId, message),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) }),
+  });
+}
+
+export function usePlaceFinding(paperId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      findingId,
+      page,
+      bbox,
+    }: {
+      findingId: string;
+      page: number;
+      bbox: Bbox;
+    }) => api.placeFinding(paperId, findingId, page, bbox),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) }),
   });

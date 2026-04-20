@@ -115,7 +115,12 @@ class FindingDecision(str, Enum):
 
 class LocalizeStatus(str, Enum):
     pending = "pending"
-    done = "done"
+    done = "done"                      # deterministic anchor + (optional) vision presence confirmed
+    approximate = "approximate"        # deterministic candidate, block-level, not line-precise
+    not_located = "not_located"        # no candidate — finding still visible, no PDF rectangle
+    user_placed = "user_placed"        # reviewer drew the bbox manually
+    quote_unverified = "quote_unverified"  # evidence_quote not found in markdown at all
+    # deprecated — retained in the enum only to deserialize pre-v1 papers
     dropped = "dropped"
 
 
@@ -182,6 +187,13 @@ class Finding(BaseModel):
     bbox: Optional[BoundingBox] = None
     localize_status: LocalizeStatus = LocalizeStatus.pending
     visually_verified: bool = False
+    # Provenance of the bbox — drives frontend rendering state (solid vs dashed,
+    # tag copy, whether the manual-placement affordance is offered).
+    bbox_source: Optional[str] = None  # "page_map_single" | "page_map_union" | "vision_verified" | "user_placed" | "missing"
+    location_confidence: Optional[int] = None  # 0..100
+    anchor_confidence: Optional[str] = None    # exact_in_block | exact_near_block | fuzzy_in_block | fuzzy_far | none
+    # Cache key: bboxes are only valid for the parse_version they were computed against.
+    parse_version: Optional[str] = None
     decision: Optional[FindingDecision] = None
     decision_note: Optional[str] = None
     exchanges: List[Exchange] = Field(default_factory=list)
@@ -256,6 +268,11 @@ class Paper(BaseModel):
     proof_blocks: List[ProofBlock] = Field(default_factory=list)
     findings: List[Finding] = Field(default_factory=list)
     review_drafts: List[ReviewDraft] = Field(default_factory=list)
+
+    # Bumped after every successful parse step. Used as a cache key for
+    # finding bboxes: if finding.parse_version != paper.parse_version, the
+    # bbox is stale and localize must re-run.
+    parse_version: str = Field(default_factory=_uuid)
 
     created_at: str = Field(default_factory=_utc_now)
     updated_at: str = Field(default_factory=_utc_now)
@@ -341,6 +358,12 @@ class DecideRequest(BaseModel):
 
 class InvestigateRequest(BaseModel):
     message: str
+
+
+class PlaceRequest(BaseModel):
+    """Manual bbox placement. Coordinates are PDF-native (bottom-left origin, points)."""
+    page: int = Field(ge=1)
+    bbox: BoundingBox
 
 
 class ReviewGenerateRequest(BaseModel):

@@ -35,6 +35,7 @@ export function FindingPanel({
   onSelect,
   onDecide,
   onInvestigate,
+  onRequestPlacement,
   onGenerateReview,
   focusEdit,
   onClose,
@@ -45,6 +46,8 @@ export function FindingPanel({
   onSelect: (id: string) => void;
   onDecide: (id: string, verdict: "agree" | "dismiss", note?: string) => Promise<void>;
   onInvestigate: (id: string, message: string) => Promise<void>;
+  /** Enter crosshair mode to manually place this finding on the PDF. */
+  onRequestPlacement?: (id: string) => void;
   onGenerateReview?: () => void;
   focusEdit?: FocusEditSignal;
   /** When provided (narrow viewports), a close button renders in the header. */
@@ -234,6 +237,11 @@ export function FindingPanel({
                 onSelect={() => onSelect(f.id)}
                 onDecide={(v, note) => handleDecide(f.id, v, note)}
                 onInvestigate={(msg) => onInvestigate(f.id, msg)}
+                onRequestPlacement={
+                  onRequestPlacement
+                    ? () => onRequestPlacement(f.id)
+                    : undefined
+                }
                 commandSignal={
                   focusEdit && focusEdit.id === f.id
                     ? { mode: focusEdit.decision, v: focusEdit.v }

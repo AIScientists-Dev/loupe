@@ -21,6 +21,7 @@ from typing import Any, List
 
 from app.config import settings
 from app.models import Finding, IssueType, LocalizeStatus, Paper, ProofBlock, Severity
+from app.pipeline.text_anchor import normalize_loose, normalize_tight
 from app.services.events import bus
 from app.services.llm_client import LLMClient
 
@@ -89,6 +90,7 @@ async def verify_blocks_batched(
     blocks: List[ProofBlock],
     stable_digest: str,
     llm: LLMClient,
+    paper_markdown: str = "",
 ) -> List[Finding]:
     """Send N blocks in one call, get back N findings arrays. All findings merged."""
     if not blocks:
@@ -138,7 +140,7 @@ async def verify_blocks_batched(
         logger.exception("verify_blocks_batched: LLM call failed (%d blocks)", len(blocks))
         return []
 
-    return _parse_batched_response(raw, {b.proof_block_id: b for b in blocks})
+    return _parse_batched_response(raw, {b.proof_block_id: b for b in blocks}, paper_markdown)
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +155,7 @@ async def run_verify_proofs(paper: Paper, llm: LLMClient, event_bus=None) -> Non
         return
     findings = await verify_blocks_batched(
         paper.proof_blocks, paper.stable_digest or paper.markdown, llm,
+        paper_markdown=paper.markdown,
     )
     paper.findings.extend(findings)
     for f in findings:
@@ -179,7 +182,11 @@ def _render_block_body(block: ProofBlock) -> str:
     return "\n\n".join(parts)
 
 
-def _parse_batched_response(raw: Any, blocks_by_id: dict) -> List[Finding]:
+def _parse_batched_response(
+    raw: Any,
+    blocks_by_id: dict,
+    paper_markdown: str = "",
+) -> List[Finding]:
     if not isinstance(raw, dict):
         logger.warning("verify_blocks_batched: expected object, got %s", type(raw).__name__)
         return []
@@ -198,13 +205,13 @@ def _parse_batched_response(raw: Any, blocks_by_id: dict) -> List[Finding]:
             logger.info("verify_blocks_batched: unknown block_id %r — skipping", block_id)
             continue
         for item in row.get("findings") or []:
-            f = _item_to_finding(item, block)
+            f = _item_to_finding(item, block, paper_markdown)
             if f is not None:
                 findings.append(f)
     return findings
 
 
-def _item_to_finding(item: Any, block: ProofBlock) -> Finding | None:
+def _item_to_finding(item: Any, block: ProofBlock, paper_markdown: str = "") -> Finding | None:
     if not isinstance(item, dict):
         return None
 
@@ -228,10 +235,39 @@ def _item_to_finding(item: Any, block: ProofBlock) -> Finding | None:
     if not description or not evidence_quote:
         return None
 
-    if not _quote_is_verbatim(evidence_quote, block):
+    # Step 0 quote gate. Check the quote against both the block (tight/fast)
+    # and the full paper markdown (loose). If it exists in the block, we'll
+    # locate it tightly at localize time. If it only exists in the paper
+    # markdown, we accept but mark pending for deterministic search. If it's
+    # nowhere, we keep the finding only for high-severity cases (so the user
+    # still sees the concern) and mark it quote_unverified so the UI can show
+    # the right affordance — never silent-drop.
+    verdict = _quote_gate(evidence_quote, block, paper_markdown)
+    if verdict == "missing":
+        if severity == Severity.high:
+            logger.warning(
+                "verify: quote_unverified (high-severity kept, block=%s, type=%s): %r",
+                block.label or block.proof_block_id, issue_type.value, evidence_quote[:80],
+            )
+            return Finding(
+                proof_block_id=block.proof_block_id,
+                issue_type=issue_type,
+                severity=severity,
+                confidence=confidence,
+                description=description,
+                evidence_quote=evidence_quote,
+                page=block.page_hint,
+                bbox=None,
+                localize_status=LocalizeStatus.quote_unverified,
+                visually_verified=False,
+                anchor_confidence="none",
+            )
+        # Low/medium + unverifiable quote → honest drop, with a log entry
+        # that includes the raw quote so we can audit the gate.
         logger.info(
-            "verify_blocks_batched: dropped finding with non-verbatim quote (block=%s, type=%s): %r",
-            block.label or block.proof_block_id, issue_type.value, evidence_quote[:60],
+            "verify: dropped (quote not in markdown, block=%s, sev=%s, type=%s): %r",
+            block.label or block.proof_block_id, severity.value, issue_type.value,
+            evidence_quote[:80],
         )
         return None
 
@@ -249,12 +285,25 @@ def _item_to_finding(item: Any, block: ProofBlock) -> Finding | None:
     )
 
 
-def _quote_is_verbatim(quote: str, block: ProofBlock) -> bool:
+def _quote_gate(quote: str, block: ProofBlock, paper_markdown: str) -> str:
+    """Returns one of: 'in_block', 'in_paper', 'missing'.
+
+    'in_block':  quote found inside the parent proof block (tight match).
+    'in_paper':  quote found only elsewhere in paper markdown (tight or loose).
+    'missing':   quote not found anywhere — AI paraphrased or hallucinated.
+    """
     if not quote:
-        return False
-    haystack = (block.statement or "") + "\n" + (block.body or "")
-    if quote in haystack:
-        return True
-    norm_q = " ".join(quote.split())
-    norm_h = " ".join(haystack.split())
-    return norm_q in norm_h
+        return "missing"
+    haystack_block = (block.statement or "") + "\n" + (block.body or "")
+    if quote in haystack_block:
+        return "in_block"
+    nq = normalize_tight(quote)
+    nb = normalize_tight(haystack_block)
+    if nq and nq in nb:
+        return "in_block"
+    if paper_markdown:
+        if quote in paper_markdown or nq in normalize_tight(paper_markdown):
+            return "in_paper"
+        if normalize_loose(nq) in normalize_loose(paper_markdown):
+            return "in_paper"
+    return "missing"

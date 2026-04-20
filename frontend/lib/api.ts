@@ -3,6 +3,7 @@
 // In mock mode, MSW intercepts these same URLs in the browser.
 
 import type {
+  Bbox,
   CostReport,
   Decision,
   DraftReview,
@@ -111,6 +112,12 @@ export const api = {
   localizeFinding: (paperId: string, findingId: string) =>
     request<Finding>(`/papers/${paperId}/findings/${findingId}/localize`, {
       method: "POST",
+    }),
+
+  placeFinding: (paperId: string, findingId: string, page: number, bbox: Bbox) =>
+    request<Finding>(`/papers/${paperId}/findings/${findingId}/place`, {
+      method: "POST",
+      body: JSON.stringify({ page, bbox }),
     }),
 
   generateReview: (paperId: string) =>

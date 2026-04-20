@@ -17,6 +17,12 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.models import PageMapEntry, Paper, ProofBlock, ProofKind
+from app.pipeline.text_anchor import (
+    bbox_for_offset,
+    locate_legacy,
+    page_for_offset,
+    section_for_offset,
+)
 from app.services.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -123,7 +129,7 @@ def _item_to_block(
         return None
 
     anchor = statement or body
-    char_start = _locate(markdown, anchor, label)
+    char_start = locate_legacy(markdown, anchor, label)
     if char_start < 0:
         logger.warning(
             "extract_proofs: could not locate block in markdown (label=%s kind=%s); skipping",
@@ -133,13 +139,13 @@ def _item_to_block(
 
     body_end = char_start + len(anchor)
     if body and statement:
-        body_start = _locate(markdown, body, None, after=body_end)
+        body_start = locate_legacy(markdown, body, None, after=body_end)
         if body_start >= 0:
             body_end = max(body_end, body_start + len(body))
 
-    page_hint = _page_for_offset(page_map, char_start) or 1
-    section = _section_for_offset(page_map, char_start)
-    bbox = _bbox_for_offset(page_map, char_start)
+    page_hint = page_for_offset(page_map, char_start) or 1
+    section = section_for_offset(page_map, char_start)
+    bbox = bbox_for_offset(page_map, char_start)
 
     return ProofBlock(
         kind=kind,
@@ -154,54 +160,3 @@ def _item_to_block(
     )
 
 
-def _locate(markdown: str, text: str, label: Optional[str], after: int = 0) -> int:
-    """Find `text` in `markdown`. Try exact, then anchored by label + prefix."""
-    if not text:
-        return -1
-
-    # 1. exact substring
-    idx = markdown.find(text, after)
-    if idx >= 0:
-        return idx
-
-    # 2. anchor on the first line (first 120 chars) — robust to trailing whitespace diffs
-    anchor = text[:120].strip()
-    if anchor:
-        idx = markdown.find(anchor, after)
-        if idx >= 0:
-            return idx
-
-    # 3. anchor on label + first 40 chars of statement
-    if label:
-        needle = label
-        short = text[:40].strip()
-        combo = f"{needle}" if not short else f"{needle} ({short[:30]}"
-        idx = markdown.find(combo, after)
-        if idx >= 0:
-            return idx
-        idx = markdown.find(needle, after)
-        if idx >= 0:
-            return idx
-
-    return -1
-
-
-def _page_for_offset(page_map: List[PageMapEntry], offset: int) -> Optional[int]:
-    for entry in page_map:
-        if entry.char_start <= offset < entry.char_end:
-            return entry.page
-    return page_map[-1].page if page_map else None
-
-
-def _section_for_offset(page_map: List[PageMapEntry], offset: int) -> Optional[str]:
-    for entry in page_map:
-        if entry.char_start <= offset < entry.char_end:
-            return entry.section
-    return None
-
-
-def _bbox_for_offset(page_map: List[PageMapEntry], offset: int):
-    for entry in page_map:
-        if entry.char_start <= offset < entry.char_end:
-            return entry.bbox
-    return None

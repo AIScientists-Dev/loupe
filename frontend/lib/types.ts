@@ -106,7 +106,29 @@ export type IssueType =
 
 export type Severity = "high" | "medium" | "low";
 export type Decision = "agree" | "dismiss";
-export type LocalizeStatus = "pending" | "done" | "dropped";
+export type LocalizeStatus =
+  | "pending"
+  | "done"
+  | "approximate"
+  | "not_located"
+  | "user_placed"
+  | "quote_unverified"
+  // "dropped" kept for tolerance of legacy papers persisted under the old localizer
+  | "dropped";
+
+export type BboxSource =
+  | "page_map_single"
+  | "page_map_union"
+  | "vision_verified"
+  | "user_placed"
+  | "missing";
+
+export type AnchorConfidence =
+  | "exact_in_block"
+  | "exact_near_block"
+  | "fuzzy_in_block"
+  | "fuzzy_far"
+  | "none";
 export type ExchangeRole = "user" | "assistant";
 
 export interface Bbox {
@@ -147,8 +169,13 @@ export interface Finding {
   confidence: number;
   bbox?: Bbox;
   bbox_page?: number;
+  page?: number;
   visually_verified: boolean;
   localize_status: LocalizeStatus;
+  bbox_source?: BboxSource;
+  location_confidence?: number;
+  anchor_confidence?: AnchorConfidence;
+  parse_version?: string;
   decision?: Decision;
   decision_note?: string;
   exchanges: Exchange[];

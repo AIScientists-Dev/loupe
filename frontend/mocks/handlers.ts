@@ -540,6 +540,27 @@ export const handlers = [
     return HttpResponse.json(f);
   }),
 
+  http.post("/api/v1/papers/:id/findings/:fid/place", async ({ params, request }) => {
+    const p = papers.get(params.id as string);
+    const f = p?.findings.find((x) => x.id === params.fid);
+    if (!p || !f)
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "Not found" } },
+        { status: 404 }
+      );
+    const body = (await request.json()) as {
+      page: number;
+      bbox: { x: number; y: number; width: number; height: number };
+    };
+    (f as Finding).bbox = { ...body.bbox, page: body.page };
+    (f as Finding).page = body.page;
+    (f as Finding).localize_status = "user_placed";
+    (f as Finding).bbox_source = "user_placed";
+    (f as Finding).location_confidence = 100;
+    await delay(120);
+    return HttpResponse.json(f);
+  }),
+
   http.post(
     "/api/v1/papers/:id/findings/:fid/investigate",
     async ({ params, request }) => {

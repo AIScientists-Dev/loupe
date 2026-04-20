@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from app.config import settings
 from app.models import (
+    BoundingBox,
     Exchange,
     ExchangeRole,
     Finding,
@@ -255,8 +256,16 @@ class Orchestrator:
 
         by_page: dict[int, list] = {}
         for f in paper.findings:
-            if f.localize_status == LocalizeStatus.pending and not f.soft_deleted:
-                by_page.setdefault(f.page, []).append(f)
+            # Re-run for anything that isn't terminally placed. soft_deleted is
+            # a legacy marker from the vision-first era — ignore it so old
+            # findings re-surface deterministically.
+            if f.localize_status == LocalizeStatus.user_placed:
+                continue
+            if f.parse_version == paper.parse_version and f.localize_status in (
+                LocalizeStatus.done, LocalizeStatus.not_located, LocalizeStatus.quote_unverified,
+            ):
+                continue
+            by_page.setdefault(f.page, []).append(f)
         if not by_page:
             return
 
@@ -312,6 +321,105 @@ class Orchestrator:
             f.decision_note = (note or None)
             paper.updated_at = _now()
             self.store.save_paper(paper)
+            return f
+
+    async def verify_finding(
+        self,
+        paper_id: str,
+        finding_id: str,
+    ) -> Optional[Finding]:
+        """Tier-4 on-demand vision presence check for a single finding.
+
+        Does not change bbox. Flips visually_verified and location_confidence
+        based on vision's yes/no answer on the finding's current candidate page.
+        """
+        from app.pipeline.steps.localize import _render_page_png, VISION_PRESENCE_MIN_CONFIDENCE
+
+        paper = self.store.load_paper(paper_id)
+        if not paper:
+            return None
+        f = paper.finding(finding_id)
+        if not f:
+            return None
+        page = f.page or (f.bbox.page if f.bbox else None)
+        if not page:
+            return None
+        pdf_bytes = self.store.load_pdf(paper_id)
+        if not pdf_bytes:
+            return None
+        try:
+            page_png, _, _ = _render_page_png(pdf_bytes, page)
+        except Exception:
+            logger.exception("verify_finding: could not render page %d", page)
+            return None
+        try:
+            result = await self.vision.verify_quote_on_page(page_png, f.evidence_quote)
+        except Exception:
+            logger.exception("verify_finding: vision call failed")
+            return None
+
+        async with self._lock(paper_id):
+            paper = self.store.load_paper(paper_id)
+            if not paper:
+                return None
+            f = paper.finding(finding_id)
+            if not f:
+                return None
+            present = bool(result.get("present"))
+            conf = int(result.get("confidence", 0))
+            if conf >= VISION_PRESENCE_MIN_CONFIDENCE:
+                if present:
+                    f.visually_verified = True
+                    f.location_confidence = max(f.location_confidence or 0, 90)
+                    if f.bbox_source in (None, "page_map_single", "page_map_union"):
+                        f.bbox_source = "vision_verified"
+                    if f.localize_status == LocalizeStatus.approximate:
+                        f.localize_status = LocalizeStatus.done
+                else:
+                    f.visually_verified = False
+                    f.localize_status = LocalizeStatus.not_located
+                    f.bbox = None
+                    f.bbox_source = "missing"
+                    f.location_confidence = 0
+            paper.updated_at = _now()
+            self.store.save_paper(paper)
+            return f
+
+    async def place_finding(
+        self,
+        paper_id: str,
+        finding_id: str,
+        page: int,
+        bbox: BoundingBox,
+    ) -> Optional[Finding]:
+        """Manual bbox placement. Overrides any auto-localize result."""
+        async with self._lock(paper_id):
+            paper = self.store.load_paper(paper_id)
+            if not paper:
+                return None
+            f = paper.finding(finding_id)
+            if not f:
+                return None
+            f.bbox = BoundingBox(
+                page=page,
+                x=float(bbox.x),
+                y=float(bbox.y),
+                width=float(bbox.width),
+                height=float(bbox.height),
+            )
+            f.page = page
+            f.localize_status = LocalizeStatus.user_placed
+            f.bbox_source = "user_placed"
+            f.location_confidence = 100
+            f.visually_verified = False
+            f.soft_deleted = False
+            f.parse_version = paper.parse_version
+            paper.updated_at = _now()
+            self.store.save_paper(paper)
+            bus.emit(paper_id, "localize.completed", {
+                "finding_id": f.finding_id,
+                "localize_status": f.localize_status.value,
+            })
             return f
 
     async def investigate_finding(

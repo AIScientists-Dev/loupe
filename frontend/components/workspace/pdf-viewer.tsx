@@ -26,7 +26,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import type { Finding, Segment } from "@/lib/types";
+import { useQuoteRects, type QuoteRect } from "@/lib/hooks/use-quote-rects";
+import type { Bbox, Finding, Segment } from "@/lib/types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
@@ -47,6 +48,11 @@ export function PdfViewer({
   totalPages,
   onSkipSegment,
   onReopenFinding,
+  placementTarget,
+  onPlaceFinding,
+  onPlacementCancel,
+  onSelectFinding,
+  onReplacePlacement,
 }: {
   paperId: string;
   paperTitle: string;
@@ -57,6 +63,16 @@ export function PdfViewer({
   onSkipSegment?: (segmentId: string) => void;
   /** Click handler for the Reopen button on a decided bbox. */
   onReopenFinding?: (id: string) => void;
+  /** When non-null, the viewer enters crosshair mode for this finding id. */
+  placementTarget?: { findingId: string } | null;
+  /** Called when the user drags a rectangle in placement mode. */
+  onPlaceFinding?: (findingId: string, page: number, bbox: Bbox) => void;
+  /** Called when the user Escs out of placement mode. */
+  onPlacementCancel?: () => void;
+  /** Called when the user clicks the "see panel" pill for a not_located finding. */
+  onSelectFinding?: (findingId: string) => void;
+  /** Start a new placement for a finding that already has a bbox. */
+  onReplacePlacement?: (findingId: string) => void;
 }) {
   const [zoom, setZoom] = React.useState(1);
   const [currentPage, setCurrentPage] = React.useState(1);
@@ -138,7 +154,8 @@ export function PdfViewer({
       const size = pageSizes[pg];
       if (size && size.width > 0) {
         const scale = target.clientWidth / size.width;
-        const cssTop = (size.height - selected.bbox.y - selected.bbox.height) * scale;
+        // Top-left origin (MinerU convention); no Y flip.
+        const cssTop = selected.bbox.y * scale;
         scrollTo = pageTopInScroll + cssTop - 96;
       }
     }
@@ -188,10 +205,43 @@ export function PdfViewer({
     for (const f of findings) {
       const p = f.bbox?.page ?? f.bbox_page ?? null;
       if (p == null) continue;
+      if (
+        f.localize_status === "not_located" ||
+        f.localize_status === "quote_unverified" ||
+        f.localize_status === "dropped"
+      )
+        continue;
       (m[p] ??= []).push(f);
     }
     return m;
   }, [findings]);
+
+  // Findings that belong to a page but aren't drawn as a rect: not_located /
+  // quote_unverified. The page-top pill points users at the panel.
+  const unpinnedByPage = React.useMemo(() => {
+    const m: Record<number, Finding[]> = {};
+    for (const f of findings) {
+      if (
+        f.localize_status !== "not_located" &&
+        f.localize_status !== "quote_unverified"
+      )
+        continue;
+      const p = f.bbox?.page ?? f.bbox_page ?? f.page ?? null;
+      if (p == null) continue;
+      (m[p] ??= []).push(f);
+    }
+    return m;
+  }, [findings]);
+
+  // Esc cancels an active placement.
+  React.useEffect(() => {
+    if (!placementTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onPlacementCancel?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [placementTarget, onPlacementCancel]);
 
   const pendingSegments = React.useMemo(
     () => (segments ?? []).filter((s) => s.status === "pending"),
@@ -426,7 +476,7 @@ export function PdfViewer({
                     <Page
                       pageNumber={pageNum}
                       width={renderW}
-                      renderTextLayer={false}
+                      renderTextLayer={true}
                       renderAnnotationLayer={false}
                       onLoadSuccess={(p) => {
                         const w = p.originalWidth ?? p.width;
@@ -438,6 +488,24 @@ export function PdfViewer({
                         );
                       }}
                     />
+                    {/* Page-top pill: findings that we know live on this
+                        page but couldn't pin (not_located, quote_unverified).
+                        Sits above any overlays so it's always clickable. */}
+                    {(unpinnedByPage[pageNum] ?? []).length > 0 && (
+                      <div className="absolute left-1/2 top-1 z-20 -translate-x-1/2">
+                        <button
+                          onClick={() => {
+                            const first = (unpinnedByPage[pageNum] ?? [])[0];
+                            if (first && onSelectFinding) onSelectFinding(first.id);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-50/95 px-2 py-0.5 text-[11px] font-medium text-amber-900 shadow-sm hover:bg-amber-100"
+                        >
+                          {(unpinnedByPage[pageNum] ?? []).length} finding
+                          {(unpinnedByPage[pageNum] ?? []).length === 1 ? "" : "s"} on
+                          this page — see panel
+                        </button>
+                      </div>
+                    )}
                     <div
                       className="pointer-events-none absolute inset-0"
                       style={{
@@ -451,12 +519,29 @@ export function PdfViewer({
                         <EvidenceCallout
                           key={f.id}
                           finding={f}
+                          pageEl={pageRefs.current[i] ?? null}
                           pageHeight={size.height}
+                          scale={scale}
                           active={selectedFindingId === f.id}
                           onReopen={onReopenFinding}
+                          onReplace={onReplacePlacement}
                         />
                       ))}
                     </div>
+                    {/* Crosshair-mode overlay for manual placement. Lives
+                        at page level so coords map to this page's PDF rect. */}
+                    {placementTarget && (
+                      <PlacementOverlay
+                        pageEl={pageRefs.current[i] ?? null}
+                        pageNumber={pageNum}
+                        pageSize={size}
+                        scale={scale}
+                        onCommit={(bbox) => {
+                          onPlaceFinding?.(placementTarget.findingId, pageNum, bbox);
+                        }}
+                        onCancel={() => onPlacementCancel?.()}
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -472,108 +557,277 @@ const DECISION_COLORS = {
   dismiss: { border: "rgb(148, 163, 184)", bg: "rgba(148, 163, 184, 0.08)" },
 } as const;
 
+// Left-margin stripe rendering (replaces the bbox-based highlight).
+//
+// Y-range comes from the text-layer match when possible (pixel-accurate);
+// falls back to the page_map block bbox. Severity color. Active stripe is
+// wider with a soft glow. Chip anchored next to the stripe top.
+
+const STRIPE_X = 18;       // in PDF points, left-margin anchor
+const STRIPE_WIDTH = 4;    // default stripe thickness
+const STRIPE_WIDTH_ACTIVE = 7;
+const STRIPE_MIN_HEIGHT = 14;
+
 function EvidenceCallout({
   finding,
+  pageEl,
   pageHeight,
+  scale,
   active,
   onReopen,
+  onReplace,
 }: {
   finding: Finding;
+  pageEl: HTMLElement | null;
   pageHeight: number;
+  scale: number;
   active: boolean;
   onReopen?: (id: string) => void;
+  onReplace?: (id: string) => void;
 }) {
-  if (!finding.bbox) return null;
-  if (finding.localize_status === "dropped") return null;
+  const quoteRects = useQuoteRects({
+    pageEl,
+    quote: finding.evidence_quote,
+    scale,
+    enabled:
+      finding.localize_status === "done" || finding.localize_status === "approximate",
+  });
 
-  const { x, y, width, height } = finding.bbox;
-  // PDF-native bbox origin is bottom-left; CSS is top-left. Convert Y.
-  const cssTop = Math.max(0, pageHeight - y - height);
+  if (finding.localize_status === "dropped") return null;
+  if (finding.localize_status === "not_located") return null;
+  if (finding.localize_status === "quote_unverified") return null;
+
+  // Derive the stripe's y-range. Prefer text-layer rects (pixel-accurate).
+  // Fall back to the bbox the backend gave us.
+  let yTop: number | null = null;
+  let yBottom: number | null = null;
+  if (quoteRects.length > 0) {
+    yTop = Math.min(...quoteRects.map((r) => r.y));
+    yBottom = Math.max(...quoteRects.map((r) => r.y + r.height));
+  } else if (finding.bbox) {
+    yTop = Math.max(0, finding.bbox.y);
+    yBottom = yTop + Math.max(finding.bbox.height, STRIPE_MIN_HEIGHT);
+  }
+  if (yTop === null || yBottom === null) return null;
+
+  const stripeHeight = Math.max(STRIPE_MIN_HEIGHT, yBottom - yTop);
+  const approximate = finding.localize_status === "approximate";
+  const userPlaced = finding.localize_status === "user_placed";
   const pending = finding.localize_status === "pending";
   const decided = finding.decision;
   const severityVar = `var(--severity-${finding.severity})`;
 
-  // Decided finding: muted green/gray border and tint, with a small
-  // "Processed — Agreed/Dismissed" chip and a Reopen button.
+  const width = active ? STRIPE_WIDTH_ACTIVE : STRIPE_WIDTH;
+
+  // Color priority: decided state > severity. Decided findings get the
+  // agree/dismiss palette; otherwise severity color.
+  let stripeColor = severityVar;
+  let decidedLabel: string | null = null;
   if (decided) {
     const c = DECISION_COLORS[decided];
-    const label = decided === "agree" ? "Agreed" : "Dismissed";
-    return (
+    stripeColor = c.border;
+    decidedLabel = decided === "agree" ? "Agreed" : "Dismissed";
+  }
+
+  const borderColor = stripeColor;
+  const stripeStyle: React.CSSProperties = {
+    left: STRIPE_X,
+    top: yTop,
+    width,
+    height: stripeHeight,
+    backgroundColor: stripeColor,
+    borderRadius: 2,
+    boxShadow: active
+      ? `0 0 0 4px color-mix(in oklch, ${stripeColor} 22%, transparent)`
+      : undefined,
+    opacity: approximate ? 0.75 : pending ? 0.55 : 1,
+  };
+
+  // Approximate/pending stripes use a dashed-looking pattern via background-image.
+  if (approximate || pending) {
+    stripeStyle.backgroundImage = `repeating-linear-gradient(to bottom, ${stripeColor} 0 4px, transparent 4px 7px)`;
+    stripeStyle.backgroundColor = "transparent";
+  }
+
+  const chipStyle: React.CSSProperties = {
+    left: STRIPE_X + width + 4,
+    top: yTop,
+    borderColor,
+    color: decided ? borderColor : undefined,
+  };
+
+  return (
+    <>
       <motion.div
         initial={false}
         animate={{ opacity: 1 }}
-        className="absolute rounded-sm"
-        style={{
-          left: x,
-          top: cssTop,
-          width,
-          minHeight: height,
-          border: `1.5px solid ${c.border}`,
-          backgroundColor: c.bg,
-        }}
-      >
+        transition={{ duration: 0.15 }}
+        className="absolute"
+        style={stripeStyle}
+      />
+      {(decided || approximate || userPlaced) && (
         <div
-          className="pointer-events-auto absolute left-0 top-0 -translate-y-full pr-1 pb-0.5"
+          className="pointer-events-auto absolute"
+          style={chipStyle}
           onClick={(e) => e.stopPropagation()}
         >
           <span
-            className="inline-flex items-center gap-1.5 rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-medium shadow-sm"
-            style={{ borderColor: c.border, color: c.border }}
+            className="inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-medium shadow-sm"
+            style={{ borderColor }}
           >
-            {decided === "agree" ? (
-              <Check className="size-3" />
-            ) : (
-              <XIcon className="size-3" />
+            {decided && (
+              <>
+                {decided === "agree" ? (
+                  <Check className="size-3" />
+                ) : (
+                  <XIcon className="size-3" />
+                )}
+                {decidedLabel}
+                {onReopen && (
+                  <button
+                    onClick={() => onReopen(finding.id)}
+                    className="ml-1 inline-flex items-center gap-0.5 rounded-sm border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-normal text-foreground/80 transition-colors hover:border-primary/50 hover:text-foreground"
+                    title="Reopen and change this decision"
+                  >
+                    <Undo2 className="size-2.5" /> Reopen
+                  </button>
+                )}
+              </>
             )}
-            Processed — {label}
-            {onReopen && (
-              <button
-                onClick={() => onReopen(finding.id)}
-                className="ml-1 inline-flex items-center gap-0.5 rounded-sm border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-normal text-foreground/80 transition-colors hover:border-primary/50 hover:text-foreground"
-                title="Reopen and change this decision"
-              >
-                <Undo2 className="size-2.5" /> Reopen
-              </button>
+            {!decided && approximate && (
+              <span className="text-muted-foreground">approximate location</span>
+            )}
+            {!decided && userPlaced && (
+              <>
+                <span className="text-muted-foreground">manually placed</span>
+                {onReplace && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReplace(finding.id);
+                    }}
+                    className="ml-1 inline-flex items-center gap-0.5 rounded-sm border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-normal text-foreground/80 transition-colors hover:border-primary/50 hover:text-foreground"
+                    title="Redraw this stripe"
+                  >
+                    <Undo2 className="size-2.5" /> Redraw
+                  </button>
+                )}
+              </>
             )}
           </span>
         </div>
-      </motion.div>
-    );
-  }
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Manual placement crosshair
+// ---------------------------------------------------------------------------
+
+function PlacementOverlay({
+  pageEl,
+  pageNumber,
+  pageSize,
+  scale,
+  onCommit,
+  onCancel,
+}: {
+  pageEl: HTMLElement | null;
+  pageNumber: number;
+  pageSize: { width: number; height: number };
+  scale: number;
+  onCommit: (bbox: Bbox) => void;
+  onCancel: () => void;
+}) {
+  const [drag, setDrag] = React.useState<
+    | null
+    | { startX: number; startY: number; curX: number; curY: number }
+  >(null);
+
+  const toPagePoint = React.useCallback(
+    (clientX: number, clientY: number) => {
+      if (!pageEl) return { x: 0, y: 0 };
+      const r = pageEl.getBoundingClientRect();
+      const xCss = Math.max(0, Math.min(r.width, clientX - r.left));
+      const yCss = Math.max(0, Math.min(r.height, clientY - r.top));
+      return { x: xCss / scale, y: yCss / scale };
+    },
+    [pageEl, scale]
+  );
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const p = toPagePoint(e.clientX, e.clientY);
+    setDrag({ startX: p.x, startY: p.y, curX: p.x, curY: p.y });
+  };
+
+  React.useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: MouseEvent) => {
+      const p = toPagePoint(e.clientX, e.clientY);
+      setDrag((d) => (d ? { ...d, curX: p.x, curY: p.y } : d));
+    };
+    const onUp = () => {
+      if (!drag) return;
+      const x0 = Math.min(drag.startX, drag.curX);
+      const y0 = Math.min(drag.startY, drag.curY);
+      const x1 = Math.max(drag.startX, drag.curX);
+      const y1 = Math.max(drag.startY, drag.curY);
+      const cssW = x1 - x0;
+      const cssH = y1 - y0;
+      setDrag(null);
+      if (cssW < 2 || cssH < 2) {
+        // treat as mis-click; stay in placement mode
+        return;
+      }
+      // Backend uses top-left origin (MinerU convention). Match it directly.
+      const bbox: Bbox = {
+        page: pageNumber,
+        x: x0,
+        y: y0,
+        width: cssW,
+        height: cssH,
+      };
+      onCommit(bbox);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [drag, toPagePoint, pageNumber, pageSize.height, onCommit]);
+
+  const rectStyle = drag
+    ? (() => {
+        const x0 = Math.min(drag.startX, drag.curX) * scale;
+        const y0 = Math.min(drag.startY, drag.curY) * scale;
+        const w = Math.abs(drag.curX - drag.startX) * scale;
+        const h = Math.abs(drag.curY - drag.startY) * scale;
+        return { left: x0, top: y0, width: w, height: h };
+      })()
+    : null;
 
   return (
-    <motion.div
-      initial={false}
-      animate={{
-        opacity: 1,
-        scale: active ? 1.01 : 1,
-      }}
-      transition={{ duration: 0.2 }}
-      className={cn("absolute rounded-sm", active && "pointer-events-auto")}
-      style={{
-        left: x,
-        top: cssTop,
-        width,
-        minHeight: height,
-        border: `${active ? 2.5 : 2}px ${pending ? "dashed" : "solid"} ${severityVar}`,
-        backgroundColor: active
-          ? "rgba(247, 215, 82, 0.35)"
-          : "rgba(247, 215, 82, 0.18)",
-        boxShadow: active
-          ? `0 0 0 3px color-mix(in oklch, ${severityVar} 22%, transparent)`
-          : undefined,
-      }}
+    <div
+      className="absolute inset-0 z-30"
+      style={{ cursor: "crosshair", background: "rgba(0,0,0,0.02)" }}
+      onMouseDown={handleMouseDown}
+      onClick={(e) => e.stopPropagation()}
+      title="Drag to place this finding — Esc to cancel"
     >
-      {active && (
-        <motion.span
-          initial={{ opacity: 0.5, scale: 1 }}
-          animate={{ opacity: 0, scale: 1.12 }}
-          transition={{ duration: 1, ease: "easeOut" }}
-          className="pointer-events-none absolute inset-0 rounded-sm"
-          style={{ border: `2px solid ${severityVar}` }}
+      {rectStyle && (
+        <div
+          className="absolute rounded-sm border-2 border-amber-500 bg-amber-200/25"
+          style={rectStyle}
         />
       )}
-    </motion.div>
+      <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-medium text-white shadow">
+        Drag a box over the finding · Esc to cancel
+      </div>
+    </div>
   );
 }
 

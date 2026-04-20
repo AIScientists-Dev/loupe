@@ -56,8 +56,9 @@ class FileStore:
             except (OSError, json.JSONDecodeError):
                 continue
             findings = data.get("findings", [])
-            active = [f for f in findings if not f.get("soft_deleted", False)]
-            decided = sum(1 for f in active if f.get("decision") is not None)
+            # Every finding surfaces — we no longer hide any. The legacy
+            # `soft_deleted` flag from the vision-first era is ignored.
+            decided = sum(1 for f in findings if f.get("decision") is not None)
             results.append(PaperSummary(
                 paper_id=data["paper_id"],
                 filename=data["filename"],
@@ -65,7 +66,7 @@ class FileStore:
                 status=data["status"],
                 step=data["step"],
                 step_index=data.get("step_index", 0),
-                finding_count=len(active),
+                finding_count=len(findings),
                 decided_count=decided,
                 created_at=data["created_at"],
             ))

@@ -27,6 +27,8 @@ export type FindingCardProps = {
   onSelect: () => void;
   onDecide: (verdict: "agree" | "dismiss", note?: string) => Promise<void>;
   onInvestigate: (message: string) => Promise<void>;
+  /** Invoked when the user asks to place this finding's bbox by hand. */
+  onRequestPlacement?: () => void;
   /** Keyed imperative signal: when `v` changes, open the given mode. */
   commandSignal?: { mode: "agree" | "dismiss" | "investigate"; v: number };
   /** When true, hide all action affordances — used on /share/:id. */
@@ -129,7 +131,11 @@ export function FindingCard(props: FindingCardProps) {
             <span className="text-muted-foreground">
               p.{finding.bbox?.page ?? finding.bbox_page ?? "?"}
             </span>
-            <LocalizeBadge status={finding.localize_status} />
+            <LocalizeBadge
+              status={finding.localize_status}
+              onPlace={props.onRequestPlacement}
+              readOnly={props.readOnly}
+            />
           </div>
 
           <div className="mt-2 text-sm leading-relaxed text-foreground">
@@ -266,20 +272,92 @@ export function FindingCard(props: FindingCardProps) {
   );
 }
 
-function LocalizeBadge({ status }: { status: Finding["localize_status"] }) {
+function LocalizeBadge({
+  status,
+  onPlace,
+  readOnly,
+}: {
+  status: Finding["localize_status"];
+  onPlace?: () => void;
+  readOnly?: boolean;
+}) {
   if (status === "done") return null;
+  if (status === "user_placed") {
+    if (readOnly || !onPlace) return null;
+    return (
+      <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-[10px] text-foreground">
+        manually placed
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onPlace();
+          }}
+          className="ml-1 underline underline-offset-2 hover:no-underline"
+        >
+          Redraw
+        </button>
+      </span>
+    );
+  }
+  if (status === "pending") {
+    return (
+      <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-highlight/20 px-2 py-0.5 text-[10px] text-foreground">
+        <Loader2 className="size-2.5 animate-spin" /> pinning…
+      </span>
+    );
+  }
+  if (status === "approximate") {
+    return (
+      <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-900">
+        approximate location
+        {!readOnly && onPlace && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlace();
+            }}
+            className="ml-1 underline underline-offset-2 hover:no-underline"
+          >
+            Place manually
+          </button>
+        )}
+      </span>
+    );
+  }
+  if (status === "not_located") {
+    return (
+      <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-900">
+        couldn't locate exact spot
+        {!readOnly && onPlace && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlace();
+            }}
+            className="ml-1 underline underline-offset-2 hover:no-underline"
+          >
+            Place manually
+          </button>
+        )}
+      </span>
+    );
+  }
+  if (status === "quote_unverified") {
+    return (
+      <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-900">
+        quote unverified
+      </span>
+    );
+  }
   if (status === "dropped") {
+    // Legacy — old papers only.
     return (
       <span className="ml-1 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
         dropped (parser mismatch)
       </span>
     );
   }
-  return (
-    <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-highlight/20 px-2 py-0.5 text-[10px] text-foreground">
-      <Loader2 className="size-2.5 animate-spin" /> pinning…
-    </span>
-  );
+  return null;
 }
 
 function DecidedFooter({
