@@ -2,26 +2,22 @@
   <img src="frontend/public/brand/social/readme-banner-1280x320.png" alt="Loupe — a loupe for your proofs" width="100%">
 </p>
 
-<h1 align="center">Loupe</h1>
+<div align="center">
 
-<p align="center">
-  <strong>A loupe for your proofs.</strong><br>
-  An open-source AI proof reviewer for mathematical and statistical papers.
-</p>
+# Loupe
 
-<p align="center">
-  <a href="#quick-start"><img alt="Quick start" src="https://img.shields.io/badge/start-local%20dev-065F46?style=flat-square"></a>
-  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
-  <a href="https://loupe.morphmind.ai"><img alt="Hosted" src="https://img.shields.io/badge/hosted-loupe.morphmind.ai-065F46?style=flat-square"></a>
-  <a href="#"><img alt="MorphMind" src="https://img.shields.io/badge/by-MorphMind-124442?style=flat-square"></a>
-</p>
+**A loupe for your proofs.**
+An open-source AI proof reviewer for math and statistics papers.
 
-<p align="center">
-  <a href="#what-loupe-does">What it does</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#contributing">Contributing</a>
-</p>
+[![Demo](https://img.shields.io/badge/Demo-→-065F46?style=for-the-badge)](https://loupe.morphmind.ai)
+
+[![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](./LICENSE) [![Hosted](https://img.shields.io/badge/Hosted-loupe.morphmind.ai-065F46?style=flat-square)](https://loupe.morphmind.ai) [![MorphMind](https://img.shields.io/badge/by-MorphMind-124442?style=flat-square)](https://morphmind.ai) [![Privacy](https://img.shields.io/badge/local%20LLM-supported-2D6A4F?style=flat-square)](#privacy-by-design)
+
+[**What it does**](#what-loupe-does) · [**Quick start**](#quick-start) · [**Privacy**](#privacy-by-design) · [**Model providers**](#model-providers) · [**Architecture**](#architecture)
+
+</div>
+
+> The hosted demo at **[loupe.morphmind.ai](https://loupe.morphmind.ai)** runs the latest release. Registration is gated by single-use invitation codes — request one at [morphmind.ai/loupe](https://morphmind.ai) — but everything you see there you can self-host with the steps below.
 
 ---
 
@@ -35,28 +31,45 @@ It's the opinionated take of a journal reviewer's first pass, compressed from tw
 
 ## Key features
 
-- **3-step agentic pipeline** — parse (MinerU) → extract proofs → verify proofs. Straightforward and auditable. Each step's output is inspectable.
-- **Visual localization** — every finding gets pinned to a bounding box on the PDF, verified by a vision pass. Parser-mismatched findings are silently dropped (no false bboxes).
+- **Two-stage review** — a 60-second triage produces an H/M/L verdict; a deep dive then scores the paper across six dimensions (proof, literature, clarity, numerical, relevance, novelty).
+- **Visual localization** — every finding is pinned to a bounding box on the PDF, verified by a vision pass. Parser-mismatched findings are dropped, never faked.
 - **Issue types grounded in the domain** — arithmetic, logic, unstated assumption, wrong constant, quantifier scope, citation required, definition mismatch, missing step.
-- **Investigate, don't trust blindly** — any finding can be opened into a back-and-forth thread. Quick actions: re-derive, find a counterexample, check the citation, propose a fix.
+- **Investigate, don't trust blindly** — any finding opens into a back-and-forth thread. Quick actions: re-derive, find a counterexample, check the citation, propose a fix.
 - **Severity + confidence on every finding** — triage in seconds; sort by severity, page, or confidence.
-- **Draft review generator** — produces a structured markdown review grouped by your verdicts. Edit in a live split-preview, copy or download as `.md` or `.pdf`.
-- **Local-first, OSS** — run it on your laptop. Your papers never leave your machine unless you want them to. Bring your own LLM key.
+- **Draft review generator** — produces structured markdown grouped by your verdicts. Edit live; copy or download as `.md` / `.pdf`.
+- **Model-agnostic** — Anthropic, OpenAI, DeepSeek, Moonshot, MiniMax — or your own local Ollama / vLLM / LM Studio server. Pick from the settings panel.
+- **Local-first by default** — your laptop is enough. Bring your own key, or skip the cloud entirely with the local-LLM path.
 
-## Screenshots
+---
 
-| | |
-| :--- | :--- |
-| ![Papers list](docs/screenshots/papers-list.png) | ![Analysis in progress](docs/screenshots/analysis-progress.png) |
-| *Home — review drafts, see findings, compose feedback.* | *Watch the 3-step pipeline run live.* |
-| ![Workspace](docs/screenshots/workspace.png) | ![Draft review](docs/screenshots/draft-review.png) |
-| *PDF + findings panel with bbox overlays.* | *Auto-composed review, editable live.* |
+## Privacy by design
 
-> Screenshots pending — take them on your first successful run and drop into `docs/screenshots/`.
+Peer review hands you the most sensitive document an academic produces — an unpublished manuscript under embargo. Loupe is built so you can do the work without that document ever leaving your hardware.
+
+- **Run end-to-end on a local LLM.** Point Loupe at [Ollama](https://ollama.com), [vLLM](https://github.com/vllm-project/vllm), [LM Studio](https://lmstudio.ai), `llama.cpp`'s server, or any OpenAI-compatible endpoint. Configure two env vars and the model selector picks it up automatically.
+- **Self-host the PDF parser.** [MinerU](https://github.com/opendatalab/MinerU) is open-source. Run it on your own GPU and Loupe will use it.
+- **No telemetry.** Self-hosted Loupe does not phone home. The only outbound HTTP is to the LLM and parser endpoints **you** configure.
+- **Hosted is opt-in.** [`loupe.morphmind.ai`](https://loupe.morphmind.ai) is a separate convenience deployment by MorphMind for users who don't want to run infra. Self-hosters never touch it.
+
+The settings panel labels each provider with its privacy posture so you can see at a glance whether your paper text leaves the machine.
+
+## Model providers
+
+| Group | Models | Privacy posture | Key |
+|---|---|---|---|
+| **Anthropic** | Claude Opus 4.7 (highest quality), Claude Sonnet 4.6 (default) | Sends paper text to Anthropic | `ANTHROPIC_API_KEY` |
+| **OpenAI** | GPT-4.1 | Sends paper text to OpenAI | `OPENAI_API_KEY` |
+| **China** | DeepSeek V3, Moonshot Kimi K2.5, MiniMax M2.7 | Sends paper text to the chosen provider | `DEEPSEEK_API_KEY` / `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` |
+| **Ollama (local)** | any model in your `OLLAMA_MODELS` list | **Your paper never leaves your machine** | `OLLAMA_BASE_URL`, `OLLAMA_MODELS` |
+| **Custom OpenAI-compatible (local)** | any model your endpoint serves | Goes only to the endpoint you configured | `LOCAL_OPENAI_BASE_URL`, `LOCAL_OPENAI_API_KEY`, `LOCAL_OPENAI_MODELS` |
+
+Configure as many as you like — Loupe queries `GET /v1/providers` at runtime and the settings panel shows only the ones that are reachable. Visual localization currently requires a vision-capable cloud model (Claude or GPT-4.1); local-only mode keeps text analysis private and skips visual verification.
+
+---
 
 ## Quick start
 
-### Run the frontend alone (mock mode — no backend needed)
+### Frontend-only (mock mode — no backend, no keys)
 
 ```bash
 cd frontend
@@ -64,40 +77,51 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3009>. The frontend ships with a hand-crafted 5-bug fixture; you can walk the full upload → analyze → review flow without any backend. Toggle off later by setting `NEXT_PUBLIC_USE_MOCK=0` in `frontend/.env.local`.
+Open <http://localhost:3009>. The frontend ships with a 5-bug fixture; you can walk the full upload → analyze → review flow without any backend. Set `NEXT_PUBLIC_USE_MOCK=0` in `frontend/.env.local` later to switch to the real backend.
 
-### Run backend + frontend locally
+### Full local stack (backend + frontend + your choice of LLM)
 
 ```bash
-# one terminal
+# 1. Backend
 cd backend
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp ../.env.example ../.env
+# Edit ../.env — fill in at least ONE of the provider blocks below.
 uvicorn app.main:app --reload --port 8009
 
-# another terminal
+# 2. Frontend (separate terminal)
 cd frontend
 npm install
-npm run dev
+npm run dev   # http://localhost:3009
 ```
 
-Frontend runs on `:3009`, backend on `:8009`. Frontend proxies `/api/*` to the backend (see `frontend/next.config.mjs`).
-
-### Configure providers
-
-Copy `.env.example` → `.env` in the repo root and fill in at least one:
+#### Cloud setup (one example)
 
 ```bash
-# Default provider for parse + extract + verify
+# in .env
 ANTHROPIC_API_KEY=sk-ant-...
-
-# Optional overrides; see backend/app/config.py for all options
 DEFAULT_MODEL=claude-sonnet-4-6
-VISION_MODEL=claude-opus-4-7
 ```
 
-Supported providers: Anthropic (Sonnet / Opus), OpenAI (GPT-4.1), DeepSeek V3, Moonshot (Kimi K2.5), MiniMax M2.7. Visual localization requires an Anthropic vision-capable model.
+#### Local setup with Ollama (private path)
+
+```bash
+# in .env
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODELS=qwen2.5:32b,llama3.1:70b
+DEFAULT_MODEL=ollama:qwen2.5:32b
+```
+
+```bash
+# host
+ollama pull qwen2.5:32b
+ollama serve   # runs on :11434 by default
+```
+
+That's it — Loupe will route every analysis call to Ollama. Your paper text never leaves localhost.
+
+---
 
 ## Architecture
 
@@ -116,8 +140,10 @@ Supported providers: Anthropic (Sonnet / Opus), OpenAI (GPT-4.1), DeepSeek V3, M
         ▼                   ▼                      ▼
  ┌─────────────┐   ┌──────────────────┐   ┌──────────────────┐
  │   MinerU    │   │  LLM providers   │   │  Vision model    │
- │  (parse →   │   │  (extract, verify,│   │ (localize bbox + │
- │  markdown)  │   │   investigate)   │   │  verify evidence)│
+ │  (parse →   │   │  Anthropic /     │   │ (localize bbox + │
+ │   markdown) │   │  OpenAI / China /│   │  verify evidence)│
+ │  self-host  │   │  Ollama / local  │   │   cloud vision   │
+ │  optional   │   │  OpenAI-compat   │   │   model required │
  └─────────────┘   └──────────────────┘   └──────────────────┘
 ```
 
@@ -129,30 +155,33 @@ Everything is **raw HTTP** — no SDK dependencies for LLM providers, easy to fo
 loupe/
 ├── backend/
 │   └── app/
-│       ├── main.py              # FastAPI app, singletons
-│       ├── models.py            # Pydantic shapes (mirror frontend/lib/types.ts)
-│       ├── routes/              # /papers, findings, review
-│       ├── services/            # orchestrator, llm_client, storage, mineru_client
-│       └── pipeline/            # 3 steps: parse → extract_proofs → verify_proofs
-│           └── prompts/         # composable prompt builders
+│       ├── main.py               # FastAPI app, singletons
+│       ├── config.py             # env-driven settings
+│       ├── models.py             # Pydantic shapes (mirror frontend/lib/types.ts)
+│       ├── routes/               # /papers, findings, review, providers, folders
+│       ├── services/             # orchestrator, llm_client, storage, mineru_client
+│       └── pipeline/             # 3 steps: parse → extract_proofs → verify_proofs
+│           └── prompts/          # composable prompt builders
 ├── frontend/
-│   ├── app/                     # Next.js App Router
-│   │   └── papers/[id]/         # workspace (PDF + findings panel)
+│   ├── app/                      # Next.js App Router
+│   │   └── papers/[id]/          # workspace (PDF + findings panel)
 │   ├── components/
-│   │   ├── brand/               # Loupe mark + lockup
-│   │   ├── shell/               # sidebar, theme toggle, MSW boot
-│   │   ├── papers/              # list, card, upload dialog
-│   │   ├── workspace/           # PDF viewer, finding card, progress strip
-│   │   ├── review/              # draft review modal
-│   │   └── ui/                  # shadcn primitives
+│   │   ├── brand/                # Loupe mark + lockup
+│   │   ├── shell/                # sidebar, theme toggle, MSW boot
+│   │   ├── papers/               # list, card, upload dialog
+│   │   ├── workspace/            # PDF viewer, finding card, progress strip
+│   │   ├── review/               # report card + draft modal
+│   │   └── ui/                   # shadcn primitives
 │   ├── lib/
-│   │   ├── api.ts               # typed fetch wrappers (the API contract)
-│   │   ├── types.ts             # mirrors backend models
-│   │   └── hooks/               # TanStack Query hooks
-│   ├── mocks/                   # MSW handlers + fixtures (5-planted-bug fixture)
+│   │   ├── api.ts                # typed fetch wrappers (the API contract)
+│   │   ├── types.ts              # mirrors backend models
+│   │   └── hooks/                # TanStack Query hooks
+│   ├── mocks/                    # MSW handlers + fixtures (5-planted-bug fixture)
 │   └── public/
-│       ├── brand/               # Loupe mark, lockup, decor, social
-│       └── icons/issue-types/   # 9 finding glyphs
+│       ├── brand/                # Loupe mark, lockup, decor, social
+│       └── icons/issue-types/    # 9 finding glyphs
+├── LICENSE                       # Apache 2.0
+├── NOTICE                        # required Apache attribution
 └── README.md
 ```
 
@@ -176,6 +205,8 @@ POST   /v1/papers/{id}/findings/{fid}/localize      on-demand vision-verify
 POST   /v1/papers/{id}/review/generate      → {draft_id, markdown}
 PATCH  /v1/papers/{id}/review/{draft_id}    save editor changes
 GET    /v1/papers/{id}/review/{draft_id}/export?format=pdf|md
+
+GET    /v1/providers                        configured LLM providers + reachability
 ```
 
 Error envelope is uniform: `{ error: { code, message, detail? } }`.
@@ -186,54 +217,36 @@ Loupe is a sibling product in the MorphMind design family:
 
 - **Primary:** emerald `#065F46` (`oklch(0.432 0.095 166.913)`)
 - **Type:** Noto Sans (UI + wordmark) · Geist Mono (code + formulae)
-- **Mark:** lens + reticle (precision, optical). Distinct from AgentLab's hex (network, multi-agent).
-- **Tokens:** live in `frontend/app/globals.css` as CSS variables; full brand spec in `frontend/public/brand/README.md`.
+- **Mark:** lens + reticle (precision, optical). Distinct from sister projects' marks.
+- **Tokens:** live in `frontend/app/globals.css` as CSS variables.
+
+## Hosted vs self-hosted
+
+| | Hosted (loupe.morphmind.ai) | Self-hosted |
+|---|---|---|
+| Setup | None — sign in with an invitation code | Clone, install, fill in `.env` |
+| LLM key | MorphMind's | Yours |
+| PDF parsing | MorphMind's MinerU | Yours (or skip) |
+| Privacy | Paper text reaches MorphMind + the chosen LLM | Stays on your hardware (Ollama path) |
+| Cost | Per-paper fee — see pricing page | Provider cost only |
+| Updates | Latest release, automatically | When you `git pull` |
 
 ## Contributing
 
-Loupe is new and the backend is moving fast. The best way to help right now:
+Loupe is in active development. The most useful contributions right now:
 
-1. **Try it on a real paper** and open an issue with a screenshot + the paper's arXiv link. The hardest thing to improve is the verifier prompt, and real cases drive that.
-2. **File false-positive and false-negative examples** with the quoted evidence — we use those to tune the verify_proofs prompt.
-3. **Improve the mock fixtures** (`frontend/mocks/fixtures/papers.ts`) — the 5-planted-bug paper is the demo baseline; more bug types welcome.
+1. **Try it on a real paper** and open an issue with a screenshot + the paper's arXiv link. The hardest thing to improve is the verifier prompt; real cases drive that.
+2. **File false-positive and false-negative examples** with the quoted evidence — we use these to tune `verify_proofs`.
+3. **New LLM provider routes** — extend `_ROUTING` in `backend/app/services/llm_client.py` and the matching entry in `backend/app/routes/providers.py`.
 4. **Frontend polish** — empty states, a11y, keyboard shortcuts, dark-mode audit.
 
-Please open an issue before sending a PR for anything larger than a bug fix.
-
-### End-to-end test workflow (before merging UI changes)
-
-There's a Playwright-based user-journey script at `e2e/journey.mjs` (the `e2e/` directory itself is gitignored because it contains per-run screenshots, video, and logs). It exercises the full flow — upload or open paper → toolbar (thumbs, pinch-zoom, fullscreen) → per-finding interactions (agree-with-note, dismiss-with-note, investigate, keyboard-A, reopen + change-decision) → bulk decide remaining findings via API → generate-review (real backend call) → filter tabs — and verifies state against the backend, not just the DOM.
-
-One-time setup:
-
-```bash
-cd e2e
-ln -sfn ../frontend/node_modules ./node_modules   # reuse frontend's playwright
-printf '{"name":"loupe-e2e","private":true,"type":"module"}\n' > package.json
-```
-
-Run the harness (backend on `:8009` and frontend on `:3009` must be up):
-
-```bash
-cd frontend && node ../e2e/journey.mjs            # fast path (~60s)
-cd frontend && SLOW=1 node ../e2e/journey.mjs     # also covers upload (~20 min)
-cd frontend && HEADED=1 node ../e2e/journey.mjs   # watch it live in a real browser
-cd frontend && RESET=0 node ../e2e/journey.mjs    # don't reset paper decisions
-```
-
-Outputs land in `e2e/runs/<timestamp>/`:
-
-- `FRONTEND_ISSUES.md` — severity-ranked list of bugs the harness noticed (pageerrors, 4xx/5xx responses, missing selectors, unpersisted state)
-- `screenshots/NN_step.png` — one shot per step (27 by default)
-- `video.webm` — full replay
-- `console.log`, `network.log`, `pageerrors.log` — browser diagnostics
-
-**Reviewer workflow:** before shipping any UI change, run the script, open `FRONTEND_ISSUES.md`, and attach it (or a summary) to the PR. A clean run is `high=0 medium=0 low=0`.
+Loupe is licensed under Apache 2.0; by submitting a PR you agree your contribution is licensed under the same terms (no separate CLA required — the Apache 2.0 patent grant in §3 of `LICENSE` covers your contribution automatically). Please open an issue before sending a PR for anything larger than a bug fix.
 
 ## Roadmap (not promises)
 
 - SSE streaming for the analysis view
 - Token streaming on investigation replies
+- Local vision model adapter (so the localize step works without a cloud key)
 - Batch mode (queue up 10 papers, walk through them in sequence)
 - Learned-rules personalization (what the editor flagged last time, de-duplicated this time)
 - Venue templates (JASA, Biometrika, NeurIPS, ICML) for the draft review
@@ -241,14 +254,13 @@ Outputs land in `e2e/runs/<timestamp>/`:
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). Copyright © 2026 AIScientists, Inc. (dba MorphMind).
+Apache 2.0 — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). Copyright © 2026 AIScientists, Inc. (dba MorphMind).
 
 ---
 
 <p align="center">
   <sub>
     Loupe is an open-source agent by <a href="https://morphmind.ai"><strong>MorphMind</strong></a>.<br>
-    Hosted at <a href="https://loupe.morphmind.ai">loupe.morphmind.ai</a>.
-    Sister project: <a href="https://agentlab.morphmind.ai">AgentLab</a>.
+    Hosted at <a href="https://loupe.morphmind.ai">loupe.morphmind.ai</a> · Engineering lead: Jay (jie@morphmind.ai).
   </sub>
 </p>
