@@ -7,7 +7,7 @@
 # Loupe
 
 **A loupe for your proofs.**
-An open-source AI proof reviewer for math and statistics papers.
+An open-source AI reviewer for scientific papers.
 
 [![Demo](https://img.shields.io/badge/Demo-→-065F46?style=for-the-badge)](https://loupe.morphmind.ai)
 
@@ -23,7 +23,7 @@ An open-source AI proof reviewer for math and statistics papers.
 
 ## What Loupe does
 
-Loupe is an AI review tool for statistics journal authors, reviewers, editors. Upload a paper; Loupe surfaces the handful of proof steps that deserve a second look — arithmetic slips, flipped inequalities, unstated assumptions, wrong constants, quantifier confusion — then lets you agree, dismiss, or push back on each one before generating a draft review you can edit and send.
+Loupe is an AI review tool for scientific paper authors, reviewers, editors. Upload a paper; Loupe surfaces the handful of proof steps that deserve a second look — arithmetic slips, flipped inequalities, unstated assumptions, wrong constants, quantifier confusion — then lets you agree, dismiss, or push back on each one before generating a draft review you can edit and send.
 
 It's the opinionated take of a journal reviewer's first pass, compressed from hours into minutes.
 
