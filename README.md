@@ -11,7 +11,7 @@ An open-source AI proof reviewer for math and statistics papers.
 
 [![Demo](https://img.shields.io/badge/Demo-→-065F46?style=for-the-badge)](https://loupe.morphmind.ai)
 
-[![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](./LICENSE) [![Hosted](https://img.shields.io/badge/Hosted-loupe.morphmind.ai-065F46?style=flat-square)](https://loupe.morphmind.ai) [![MorphMind](https://img.shields.io/badge/by-MorphMind-124442?style=flat-square)](https://morphmind.ai) [![Privacy](https://img.shields.io/badge/local%20LLM-supported-2D6A4F?style=flat-square)](#privacy-by-design)
+[![Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](./LICENSE) [![Hosted](https://img.shields.io/badge/Hosted-loupe.morphmind.ai-065F46?style=flat-square)](https://loupe.morphmind.ai) [![MorphMind](https://img.shields.io/badge/an%20agent%20of-MorphMind-124442?style=flat-square)](https://morphmind.ai) [![Privacy](https://img.shields.io/badge/local%20LLM-supported-2D6A4F?style=flat-square)](#privacy-by-design)
 
 [**What it does**](#what-loupe-does) · [**Quick start**](#quick-start) · [**Privacy**](#privacy-by-design) · [**Model providers**](#model-providers) · [**Architecture**](#architecture)
 
@@ -39,6 +39,16 @@ It's the opinionated take of a journal reviewer's first pass, compressed from ho
 - **Draft review generator** — produces structured markdown grouped by your verdicts. Edit live; copy or download as `.md` / `.pdf`.
 - **Model-agnostic** — OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax — or your own local Ollama / vLLM / LM Studio server. Pick from the settings panel.
 - **Local-first by default** — your laptop is enough. Bring your own key, or skip the cloud entirely with the local-LLM path.
+
+---
+
+## Built on MorphMind
+
+Loupe is one specialized agent built on **[MorphMind](https://morphmind.ai)** — a platform for spawning production-grade AI agents around narrow, deep domains. MorphMind handles the hard parts of agent engineering — multi-step planning, tool-using runtime, vision-verified evidence, persistent memory across sessions, structured findings with source pinning, cost guardrails, and a permission model for sensitive operations — so agent authors can focus on domain logic and prompts instead of plumbing.
+
+Loupe applies that runtime to academic peer review. The agent reads a paper, plans which proof steps deserve scrutiny, calls tools (parser, vision model, citation lookup, derivation re-runs), accumulates evidence, and lets a human steer the investigation. The same pattern — plan, tool, verify, surface — is what MorphMind uses to produce other domain-specific agents (code review, contract review, scientific writing, financial-document analysis) shipped as separate products.
+
+This open-source release publishes Loupe verbatim: the same agent loop, the same prompts, the same eval cases that run on the hosted demo. **Fork it as the reference implementation for your own MorphMind-style agent**, or skip the infra and use the managed version at [loupe.morphmind.ai](https://loupe.morphmind.ai). For agents in domains MorphMind hasn't published yet — or for partnerships — reach out at [morphmind.ai](https://morphmind.ai).
 
 ---
 
