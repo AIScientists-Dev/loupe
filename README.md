@@ -23,21 +23,21 @@ An open-source AI proof reviewer for math and statistics papers.
 
 ## What Loupe does
 
-Loupe is an AI review tool for statistics and CS-theory journal editors. Upload a paper; in 1–2 minutes, Loupe surfaces the handful of proof steps that deserve a second look — arithmetic slips, flipped inequalities, unstated assumptions, wrong constants, quantifier confusion — then lets you agree, dismiss, or push back on each one before generating a draft review you can edit and send.
+Loupe is an AI review tool for statistics journal authors, reviewers, editors. Upload a paper; Loupe surfaces the handful of proof steps that deserve a second look — arithmetic slips, flipped inequalities, unstated assumptions, wrong constants, quantifier confusion — then lets you agree, dismiss, or push back on each one before generating a draft review you can edit and send.
 
-It's the opinionated take of a journal reviewer's first pass, compressed from two hours into twenty minutes.
+It's the opinionated take of a journal reviewer's first pass, compressed from hours into minutes.
 
 **Loupe is not** a proof solver, a plagiarism checker, or a replacement for human judgment. It's a magnifier — you decide what matters.
 
 ## Key features
 
-- **Two-stage review** — a 60-second triage produces an H/M/L verdict; a deep dive then scores the paper across six dimensions (proof, literature, clarity, numerical, relevance, novelty).
+- **Two-stage review** — a one-minute triage produces an H/M/L verdict; a deep dive then scores the paper across six dimensions (proof, literature, clarity, numerical, relevance, novelty).
 - **Visual localization** — every finding is pinned to a bounding box on the PDF, verified by a vision pass. Parser-mismatched findings are dropped, never faked.
 - **Issue types grounded in the domain** — arithmetic, logic, unstated assumption, wrong constant, quantifier scope, citation required, definition mismatch, missing step.
 - **Investigate, don't trust blindly** — any finding opens into a back-and-forth thread. Quick actions: re-derive, find a counterexample, check the citation, propose a fix.
 - **Severity + confidence on every finding** — triage in seconds; sort by severity, page, or confidence.
 - **Draft review generator** — produces structured markdown grouped by your verdicts. Edit live; copy or download as `.md` / `.pdf`.
-- **Model-agnostic** — Anthropic, OpenAI, DeepSeek, Moonshot, MiniMax — or your own local Ollama / vLLM / LM Studio server. Pick from the settings panel.
+- **Model-agnostic** — OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax — or your own local Ollama / vLLM / LM Studio server. Pick from the settings panel.
 - **Local-first by default** — your laptop is enough. Bring your own key, or skip the cloud entirely with the local-LLM path.
 
 ---
@@ -57,13 +57,13 @@ The settings panel labels each provider with its privacy posture so you can see 
 
 | Group | Models | Privacy posture | Key |
 |---|---|---|---|
-| **Anthropic** | Claude Opus 4.7 (highest quality), Claude Sonnet 4.6 (default) | Sends paper text to Anthropic | `ANTHROPIC_API_KEY` |
 | **OpenAI** | GPT-4.1 | Sends paper text to OpenAI | `OPENAI_API_KEY` |
-| **China** | DeepSeek V3, Moonshot Kimi K2.5, MiniMax M2.7 | Sends paper text to the chosen provider | `DEEPSEEK_API_KEY` / `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` |
+| **Anthropic** | Claude Opus 4.7 (highest quality), Claude Sonnet 4.6 (default) | Sends paper text to Anthropic | `ANTHROPIC_API_KEY` |
+| **Other LLM Providers** | DeepSeek V3, Moonshot Kimi K2.5, MiniMax M2.7 | Sends paper text to the chosen provider | `DEEPSEEK_API_KEY` / `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` |
 | **Ollama (local)** | any model in your `OLLAMA_MODELS` list | **Your paper never leaves your machine** | `OLLAMA_BASE_URL`, `OLLAMA_MODELS` |
 | **Custom OpenAI-compatible (local)** | any model your endpoint serves | Goes only to the endpoint you configured | `LOCAL_OPENAI_BASE_URL`, `LOCAL_OPENAI_API_KEY`, `LOCAL_OPENAI_MODELS` |
 
-Configure as many as you like — Loupe queries `GET /v1/providers` at runtime and the settings panel shows only the ones that are reachable. Visual localization currently requires a vision-capable cloud model (Claude or GPT-4.1); local-only mode keeps text analysis private and skips visual verification.
+Configure as many as you like — Loupe queries `GET /v1/providers` at runtime and the settings panel shows only the ones that are reachable. Visual localization currently requires a vision-capable cloud model (such as Claude or GPT-4.1); local-only mode keeps text analysis private and skips visual verification.
 
 ---
 
@@ -260,7 +260,7 @@ Apache 2.0 — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). Copyright ©
 
 <p align="center">
   <sub>
-    Loupe is an open-source agent by <a href="https://morphmind.ai"><strong>MorphMind</strong></a>.<br>
-    Hosted at <a href="https://loupe.morphmind.ai">loupe.morphmind.ai</a> · Engineering lead: Jay (jie@morphmind.ai).
+    Loupe is an open-source agent derived from the agent-spawning platform <a href="https://morphmind.ai"><strong>MorphMind</strong></a>.<br>
+    Hosted at <a href="https://loupe.morphmind.ai">loupe.morphmind.ai</a> · Contact: Jay (jie@morphmind.ai).
   </sub>
 </p>
