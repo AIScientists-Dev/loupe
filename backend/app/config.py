@@ -19,8 +19,28 @@ class Settings(BaseSettings):
     mineru_api_url: str = ""
     mineru_timeout_seconds: float = 600.0
 
-    # LLM providers
+    # LLM providers — cloud (set per-provider keys; only what you use needs to be filled)
     anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    deepseek_api_key: str = ""
+    moonshot_api_key: str = ""
+    minimax_api_key: str = ""
+
+    # Local LLM endpoints (privacy-by-design path).
+    #
+    # Ollama: leave OLLAMA_BASE_URL empty to disable. Models are addressed
+    # as `ollama:<name>` from the frontend (e.g. `ollama:llama3.1`,
+    # `ollama:qwen2.5`). OLLAMA_MODELS is a comma-separated list the API
+    # surfaces back to the picker; the runtime accepts any name regardless.
+    ollama_base_url: str = ""
+    ollama_models: str = ""
+
+    # Generic OpenAI-compatible local endpoint — for vLLM, LM Studio,
+    # llama.cpp's server, Together, Groq, Fireworks, OpenRouter, etc.
+    # Models are addressed as `local:<name>` from the frontend.
+    local_openai_base_url: str = ""
+    local_openai_api_key: str = ""
+    local_openai_models: str = ""
 
     # Models — Sonnet for text AND vision by default (cheap enough to stay
     # under the $0.30/paper target). Override vision_model to claude-opus-4-7

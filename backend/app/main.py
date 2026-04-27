@@ -10,7 +10,10 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
+from app.routes.folders import router as folders_router
+from app.routes.onboarding import router as onboarding_router
 from app.routes.papers import router as papers_router
+from app.routes.providers import router as providers_router
 from app.services.llm_client import LLMClient
 from app.services.mineru_client import MinerUClient
 from app.services.orchestrator import Orchestrator
@@ -91,6 +94,9 @@ async def generic_exc_handler(_req: Request, exc: Exception):
 # -- routes -------------------------------------------------------------------
 
 app.include_router(papers_router)
+app.include_router(folders_router)
+app.include_router(onboarding_router)
+app.include_router(providers_router)
 
 
 @app.get("/source/pricing.py")

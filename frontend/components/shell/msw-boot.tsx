@@ -34,56 +34,40 @@ async function start() {
 
 export function MswBoot({ children }: { children: React.ReactNode }) {
   const useMock = process.env.NEXT_PUBLIC_USE_MOCK === "1";
-  // Always start hidden until effect resolves — avoids any server/client
-  // mismatch or stale-bundle fallback that leaks queries through before
-  // the worker is registered.
-  const [ready, setReady] = React.useState(false);
+  // When mocks are off we render immediately — no reason to hold paint
+  // behind a serviceWorker lookup. When mocks are on we start hidden so
+  // queries don't leak through before the worker is registered.
+  const [ready, setReady] = React.useState(!useMock);
 
   React.useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log("[loupe] MswBoot effect: useMock=", useMock);
     if (useMock) {
       start()
-        .then(() => {
-          // eslint-disable-next-line no-console
-          console.log("[loupe] MSW worker ready — fixtures active");
-          setReady(true);
-        })
-        .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error("[loupe] MSW boot failed, falling through", err);
-          setReady(true);
-        });
-    } else {
-      // If a previous session registered the MSW service worker, unregister
-      // it now — otherwise it would keep intercepting real backend requests.
-      if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
-        navigator.serviceWorker
-          .getRegistrations()
-          .then((regs) => {
-            const mswRegs = regs.filter((r) =>
-              (r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || "")
-                .includes("mockServiceWorker")
-            );
-            if (mswRegs.length) {
-              // eslint-disable-next-line no-console
-              console.log("[loupe] Unregistering stale MSW worker(s)");
-              return Promise.all(mswRegs.map((r) => r.unregister())).then(() => {
-                // Reload once so subsequent fetches go to the real network.
-                if (typeof sessionStorage !== "undefined" &&
-                    !sessionStorage.getItem("loupe-msw-unregistered")) {
-                  sessionStorage.setItem("loupe-msw-unregistered", "1");
-                  window.location.reload();
-                }
-              });
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => setReady(true));
-      } else {
-        setReady(true);
-      }
+        .then(() => setReady(true))
+        .catch(() => setReady(true));
+      return;
     }
+    // Fire-and-forget: if a previous mock session left a worker behind,
+    // unregister it so it stops intercepting real backend requests. The
+    // current page is already painted; we only need to reload if a stale
+    // worker is actually found.
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => {
+        const mswRegs = regs.filter((r) =>
+          (r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || "")
+            .includes("mockServiceWorker")
+        );
+        if (!mswRegs.length) return;
+        return Promise.all(mswRegs.map((r) => r.unregister())).then(() => {
+          if (typeof sessionStorage !== "undefined" &&
+              !sessionStorage.getItem("loupe-msw-unregistered")) {
+            sessionStorage.setItem("loupe-msw-unregistered", "1");
+            window.location.reload();
+          }
+        });
+      })
+      .catch(() => undefined);
   }, [useMock]);
 
   if (!ready) return <Splash />;

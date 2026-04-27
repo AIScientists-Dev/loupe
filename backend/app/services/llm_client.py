@@ -19,15 +19,60 @@ _MOONSHOT_URL = "https://api.moonshot.cn/v1/chat/completions"
 _MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2"
 
 # Model → (endpoint, format)  format is "anthropic" or "openai"
+# Hardcoded routes for known cloud models. Local + custom providers are
+# resolved dynamically below via prefix (ollama:* and local:*).
 _ROUTING: Dict[str, tuple] = {
-    "claude-sonnet-4-6": (_ANTHROPIC_URL, "anthropic"),
-    "claude-opus-4-6": (_ANTHROPIC_URL, "anthropic"),
-    "claude-opus-4-7": (_ANTHROPIC_URL, "anthropic"),
-    "gpt-4.1": (_OPENAI_URL, "openai"),
-    "deepseek-v3": (_DEEPSEEK_URL, "openai"),
-    "kimi-k2.5": (_MOONSHOT_URL, "openai"),
-    "minimax-m2.7": (_MINIMAX_URL, "openai"),
+    # Anthropic (Messages API)
+    "claude-opus-4-7":     (_ANTHROPIC_URL, "anthropic"),
+    "claude-sonnet-4-6":   (_ANTHROPIC_URL, "anthropic"),
+    "claude-haiku-4-5":    (_ANTHROPIC_URL, "anthropic"),
+    "claude-opus-4-6":     (_ANTHROPIC_URL, "anthropic"),  # legacy
+    # OpenAI (Chat Completions)
+    "gpt-5":               (_OPENAI_URL, "openai"),
+    "gpt-5-mini":          (_OPENAI_URL, "openai"),
+    "gpt-4o":              (_OPENAI_URL, "openai"),
+    "gpt-4o-mini":         (_OPENAI_URL, "openai"),
+    "gpt-4.1":             (_OPENAI_URL, "openai"),
+    # DeepSeek (OpenAI-compatible)
+    "deepseek-chat":       (_DEEPSEEK_URL, "openai"),
+    "deepseek-reasoner":   (_DEEPSEEK_URL, "openai"),
+    "deepseek-v3":         (_DEEPSEEK_URL, "openai"),     # legacy alias
+    # Moonshot / Kimi (OpenAI-compatible)
+    "moonshot-v1-8k":      (_MOONSHOT_URL, "openai"),
+    "moonshot-v1-32k":     (_MOONSHOT_URL, "openai"),
+    "moonshot-v1-128k":    (_MOONSHOT_URL, "openai"),
+    "kimi-k2.5":           (_MOONSHOT_URL, "openai"),     # legacy alias
+    # MiniMax (OpenAI-compatible v2 endpoint)
+    "MiniMax-Text-01":     (_MINIMAX_URL, "openai"),
+    "minimax-m2.7":        (_MINIMAX_URL, "openai"),      # legacy alias
 }
+
+
+def _resolve_route(model: str) -> Optional[tuple]:
+    """Return (url, fmt) for a model, supporting local-LLM prefixes.
+
+    Privacy-by-design path: any model name prefixed `ollama:` or `local:`
+    is routed to a self-hosted endpoint configured via env vars. The
+    paper's content never leaves the user's machine in those modes.
+    """
+    if model in _ROUTING:
+        return _ROUTING[model]
+    if model.startswith("ollama:"):
+        # Ollama exposes an OpenAI-compatible endpoint at /v1/chat/completions.
+        base = (settings.ollama_base_url or "").rstrip("/")
+        if not base:
+            return None
+        return (f"{base}/v1/chat/completions", "openai_local")
+    if model.startswith("local:"):
+        base = (settings.local_openai_base_url or "").rstrip("/")
+        if not base:
+            return None
+        # Caller may either configure a base ending in /v1 or not — accept both.
+        suffix = "" if base.endswith("/chat/completions") else "/chat/completions"
+        if not base.endswith("/v1") and "/v1/" not in base and not base.endswith("/v1/chat/completions"):
+            base = f"{base}/v1"
+        return (f"{base}{suffix}", "openai_local")
+    return None
 
 # Pricing lives in app/services/pricing.py — a single open file so users
 # can audit every number. LLMClient only observes + records.
@@ -103,14 +148,21 @@ usage_tracker = _UsageTracker()
 def _api_key_for(model: str) -> str:
     if model.startswith("claude"):
         return settings.anthropic_api_key
-    if model.startswith("gpt"):
+    if model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"):
         return settings.openai_api_key
     if model.startswith("deepseek"):
         return settings.deepseek_api_key
-    if model.startswith("kimi"):
+    if model.startswith("kimi") or model.startswith("moonshot"):
         return settings.moonshot_api_key
-    if model.startswith("minimax"):
+    if model.startswith("minimax") or model.startswith("MiniMax"):
         return settings.minimax_api_key
+    # Local providers: Ollama runs without auth; custom OpenAI-compatible
+    # endpoints may or may not require a key (vLLM, Together, Groq vary).
+    # An empty key is OK — the request just goes out without Authorization.
+    if model.startswith("ollama:"):
+        return ""
+    if model.startswith("local:"):
+        return settings.local_openai_api_key
     return settings.anthropic_api_key  # fallback
 
 
@@ -127,23 +179,39 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tag: str = "",
     ) -> str:
-        route = _ROUTING.get(model)
+        route = _resolve_route(model)
         if not route:
-            raise ValueError(f"Unknown model: {model}")
+            raise ValueError(
+                f"Unknown model: {model!r}. Cloud models must be one of "
+                f"{sorted(_ROUTING)}; local models use 'ollama:<name>' "
+                f"(needs OLLAMA_BASE_URL) or 'local:<name>' (needs LOCAL_OPENAI_BASE_URL)."
+            )
 
         url, fmt = route
         api_key = _api_key_for(model)
-        if not api_key:
+        # Local providers may run without authentication. Cloud providers
+        # always need a key — surface a clear error early.
+        is_local = fmt == "openai_local"
+        if not api_key and not is_local:
             raise ValueError(f"No API key configured for model {model}")
 
-        if fmt == "anthropic":
+        # The "openai_local" format reuses the OpenAI payload builder.
+        api_format = "anthropic" if fmt == "anthropic" else "openai"
+
+        if api_format == "anthropic":
             headers, body = self._anthropic_payload(
                 model, messages, system, temperature, max_tokens, api_key, tools
             )
         else:
+            # For local providers, strip the prefix before sending — Ollama
+            # and most OpenAI-compat servers expect the bare model name.
+            wire_model = model.split(":", 1)[1] if is_local and ":" in model else model
             headers, body = self._openai_payload(
-                model, messages, system, temperature, max_tokens, api_key
+                wire_model, messages, system, temperature, max_tokens, api_key
             )
+            if not api_key:
+                # Local Ollama without auth — drop the Authorization header.
+                headers.pop("Authorization", None)
             if tools:
                 logger.warning("tools requested for non-Anthropic provider %s — ignored", model)
 
@@ -156,6 +224,12 @@ class LLMClient:
             usage_tracker.record(model, data.get("usage", {}) or {}, tag=tag)
             return self._parse_anthropic(data)
         return self._parse_openai(data)
+
+    @staticmethod
+    def is_local(model: str) -> bool:
+        """True when the model routes to a self-hosted endpoint. Used by
+        callers that want to surface a privacy reassurance in the UI."""
+        return model.startswith("ollama:") or model.startswith("local:")
 
     # -- payload builders ------------------------------------------------------
 

@@ -3,7 +3,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
-import type { Bbox, Decision } from "@/lib/types";
+import type {
+  Bbox,
+  Decision,
+  Exchange,
+  Paper,
+  UploadPaperPayload,
+} from "@/lib/types";
 
 export const paperKeys = {
   all: ["papers"] as const,
@@ -42,7 +48,9 @@ export function usePaperStatus(id: string, enabled: boolean) {
 export function useUploadPaper() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => api.uploadPaper(file),
+    // v2: accepts the full payload (venue/folder/style); a bare File still
+    // works for legacy callers via api.uploadPaper's overload.
+    mutationFn: (input: File | UploadPaperPayload) => api.uploadPaper(input),
     onSuccess: () => qc.invalidateQueries({ queryKey: paperKeys.list() }),
   });
 }
@@ -67,8 +75,12 @@ export function useDecideFinding(paperId: string) {
       decision: Decision;
       note?: string;
     }) => api.decideFinding(paperId, findingId, decision, note),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) });
+      // /scores response is decision-derived on the backend — refresh it so
+      // the radar + aggregate update without waiting for the staleTime.
+      qc.invalidateQueries({ queryKey: ["scores", paperId] });
+    },
   });
 }
 
@@ -99,6 +111,15 @@ export function useResumePaper() {
   });
 }
 
+export function useReanalyzePaper() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.reanalyzePaper(id),
+    onSuccess: (paper) =>
+      qc.setQueryData(paperKeys.detail(paper.id), paper),
+  });
+}
+
 export function useSkipSegment(paperId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -118,7 +139,44 @@ export function useInvestigateFinding(paperId: string) {
       findingId: string;
       message: string;
     }) => api.investigateFinding(paperId, findingId, message),
-    onSuccess: () =>
+    // Optimistic update: the moment the user clicks Send, append their
+    // message + a "thinking…" placeholder so the thread feels instant.
+    // React Query caches the new paper snapshot, card re-renders with the
+    // preview, and when the real response lands onSettled swaps it in.
+    onMutate: async ({ findingId, message }) => {
+      await qc.cancelQueries({ queryKey: paperKeys.detail(paperId) });
+      const prev = qc.getQueryData<Paper>(paperKeys.detail(paperId));
+      if (prev) {
+        const now = new Date().toISOString();
+        const userMsg: Exchange = {
+          id: `_opt_user_${Date.now()}`,
+          finding_id: findingId,
+          role: "user",
+          text: message,
+          created_at: now,
+        };
+        const placeholder: Exchange = {
+          id: `_opt_pending_${Date.now()}`,
+          finding_id: findingId,
+          role: "assistant",
+          text: "…thinking",
+          created_at: now,
+        };
+        qc.setQueryData<Paper>(paperKeys.detail(paperId), {
+          ...prev,
+          findings: prev.findings.map((f) =>
+            f.id === findingId
+              ? { ...f, exchanges: [...f.exchanges, userMsg, placeholder] }
+              : f
+          ),
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(paperKeys.detail(paperId), ctx.prev);
+    },
+    onSettled: () =>
       qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) }),
   });
 }

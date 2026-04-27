@@ -1,79 +1,57 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Link2, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowLeft, ArrowLeft as BackIcon, Link2, Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Workspace } from "@/components/workspace/workspace";
+import { ReviewReport } from "@/components/review/review-report";
 import { StatusBanner } from "@/components/workspace/status-banner";
 import { RunControls } from "@/components/workspace/run-controls";
 import { SharePaperDialog } from "@/components/papers/share-paper-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import {
-  usePaper,
-  usePaperStatus,
-  useResumePaper,
-  useStopPaper,
-} from "@/lib/hooks/use-papers";
+import { paperKeys, usePaper, usePaperStatus } from "@/lib/hooks/use-papers";
 import { useAnalysisStream } from "@/lib/hooks/use-analysis-stream";
-import { useHotkeys } from "@/lib/hooks/use-hotkeys";
-import { useCostDrawer } from "@/lib/hooks/use-cost-drawer";
+import type { ReviewStage } from "@/lib/types";
 
+/**
+ * v3 surface routing:
+ *   - uploaded / triaging  → "still triaging" placeholder
+ *   - triaged / dived      → ReviewReport (the unified Stage 1/2 report card)
+ *   - diving               → Workspace split (live activity stream + PDF)
+ *   - User clicks [Adjust] on a dived paper → Workspace split (decisions)
+ */
 export default function WorkspacePage({
   params,
 }: {
   params: { id: string };
 }) {
-  const router = useRouter();
+  const qc = useQueryClient();
   const paperQuery = usePaper(params.id);
   const paper = paperQuery.data;
   const [shareOpen, setShareOpen] = React.useState(false);
+  // When the user explicitly clicks "Adjust by reviewing findings", the page
+  // overrides the default surface and shows the workspace split instead. The
+  // pref is local to this paper open — refresh resets it back to the report.
+  const [adjustOverride, setAdjustOverride] = React.useState(false);
+
   const isAnalyzing =
     !!paper && paper.status !== "ready" && paper.status !== "failed";
   const statusQuery = usePaperStatus(params.id, isAnalyzing);
   useAnalysisStream(params.id, isAnalyzing);
-  const stop = useStopPaper();
-  const resume = useResumePaper();
-  const toggleCostDrawer = useCostDrawer((s) => s.toggle);
 
-  // Workspace-level hotkeys. 's' toggles Stop/Resume based on current run state.
-  useHotkeys(
-    [
-      {
-        keys: ["s"],
-        handler: async (e) => {
-          if (!paper) return;
-          e.preventDefault();
-          if (paper.run_state === "running") {
-            try {
-              await stop.mutateAsync(paper.id);
-              toast.success("Analysis stopped");
-            } catch {}
-          } else if (
-            paper.run_state === "stopped" ||
-            paper.run_state === "paused"
-          ) {
-            try {
-              await resume.mutateAsync(paper.id);
-              toast.success("Analysis resumed");
-            } catch {}
-          }
-        },
-      },
-      {
-        keys: ["c"],
-        handler: (e) => {
-          e.preventDefault();
-          toggleCostDrawer();
-        },
-      },
-    ],
-    !!paper
-  );
-
+  // Cache-drift sync: see comment in v3 plan §3.
+  const pollSnapshot = statusQuery.data;
+  React.useEffect(() => {
+    if (!pollSnapshot || !paper) return;
+    const drift =
+      paper.status !== pollSnapshot.status ||
+      paper.findings.length !== pollSnapshot.finding_count;
+    if (!drift) return;
+    qc.invalidateQueries({ queryKey: paperKeys.detail(params.id) });
+  }, [pollSnapshot, paper, qc, params.id]);
   const polledStatus = statusQuery.data?.status;
   React.useEffect(() => {
     if (paper && polledStatus && polledStatus !== paper.status) {
@@ -82,22 +60,43 @@ export default function WorkspacePage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polledStatus]);
 
-  const hasOutline = !!paper?.segments && paper.segments.length > 0;
+  const stage: ReviewStage = (paper?.stage ?? "uploaded") as ReviewStage;
+  // Default surface choice. Adjust override beats stage routing.
+  const showSplit =
+    adjustOverride || stage === "diving";
+  const showReport =
+    !showSplit && (stage === "triaged" || stage === "dived");
+  const showTriagingPlaceholder =
+    !showSplit && (stage === "uploaded" || stage === "triaging");
 
   return (
     <div className="flex h-screen flex-col">
       <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-border px-6">
         <div className="flex min-w-0 items-center gap-3">
-          <Button variant="ghost" size="icon-sm" asChild>
-            <Link href="/papers" aria-label="Back to papers">
-              <ArrowLeft className="size-4" />
-            </Link>
-          </Button>
+          {showSplit && stage === "dived" ? (
+            // From the adjust split, "Back" goes back to the report card,
+            // not to the library — finishing decisions usually means
+            // returning to the report to finalize.
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setAdjustOverride(false)}
+              aria-label="Back to report"
+            >
+              <BackIcon className="size-4" />
+            </Button>
+          ) : (
+            <Button variant="ghost" size="icon-sm" asChild>
+              <Link href="/papers" aria-label="Back to papers">
+                <ArrowLeft className="size-4" />
+              </Link>
+            </Button>
+          )}
           <div className="min-w-0">
             <h1 className="truncate text-sm font-semibold">
-              {paper?.title ?? "Loading…"}
+              {paper ? (paper.title || paper.filename) : "Loading…"}
             </h1>
-            {paper && (
+            {paper && paper.title && (
               <p className="truncate font-mono text-xs text-muted-foreground">
                 {paper.filename}
               </p>
@@ -134,8 +133,15 @@ export default function WorkspacePage({
           <LoadingState />
         ) : !paper ? (
           <NotFoundState />
-        ) : !hasOutline && paper.run_state === "running" ? (
-          <PreOutlineSplash />
+        ) : showTriagingPlaceholder ? (
+          <TriagingPlaceholder filename={paper.filename} />
+        ) : showReport ? (
+          <div className="flex min-h-0 flex-1 overflow-y-auto bg-muted/10">
+            <ReviewReport
+              paper={paper}
+              onAdjust={() => setAdjustOverride(true)}
+            />
+          </div>
         ) : (
           <Workspace paper={paper} />
         )}
@@ -175,13 +181,19 @@ function NotFoundState() {
   );
 }
 
-function PreOutlineSplash() {
+function TriagingPlaceholder({ filename }: { filename: string }) {
   return (
-    <div className="grid flex-1 place-items-center">
-      <div className="flex flex-col items-center gap-2 text-muted-foreground">
-        <Loader2 className="size-5 animate-spin text-primary" />
-        <p className="text-sm">Reading outline…</p>
-        <p className="text-[11px]">Usually takes ~2 seconds.</p>
+    <div className="grid flex-1 place-items-center bg-muted/10">
+      <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
+        <Loader2 className="size-6 animate-spin text-primary" />
+        <div>
+          <div className="text-sm font-medium text-foreground">
+            Triaging {filename}…
+          </div>
+          <div className="mt-1 text-xs">
+            Scope, novelty, fit + quick verdict — usually under a minute.
+          </div>
+        </div>
       </div>
     </div>
   );

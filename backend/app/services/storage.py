@@ -59,6 +59,7 @@ class FileStore:
             # Every finding surfaces — we no longer hide any. The legacy
             # `soft_deleted` flag from the vision-first era is ignored.
             decided = sum(1 for f in findings if f.get("decision") is not None)
+            triage = data.get("triage") or {}
             results.append(PaperSummary(
                 paper_id=data["paper_id"],
                 filename=data["filename"],
@@ -69,6 +70,16 @@ class FileStore:
                 finding_count=len(findings),
                 decided_count=decided,
                 created_at=data["created_at"],
+                # v2 badge fields — surfaced on the library list so the
+                # sidebar can group + the cards can show H/M/L badges
+                # without a per-paper detail fetch.
+                venue_type=data.get("venue_type"),
+                venue_name=data.get("venue_name"),
+                folder=data.get("folder"),
+                stage=data.get("stage"),
+                triage_verdict=triage.get("verdict") if isinstance(triage, dict) else None,
+                final_score=data.get("final_score"),
+                flag=data.get("flag"),
             ))
         return results
 

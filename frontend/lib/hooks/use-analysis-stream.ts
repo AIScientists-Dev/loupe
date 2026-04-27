@@ -14,6 +14,7 @@ import type {
   SegmentStatus,
 } from "@/lib/types";
 import { paperKeys } from "./use-papers";
+import { useActivityLog } from "./use-activity-log";
 
 /**
  * Subscribe to the backend SSE analysis stream. Updates the React Query
@@ -32,6 +33,7 @@ import { paperKeys } from "./use-papers";
  */
 export function useAnalysisStream(paperId: string, enabled: boolean) {
   const qc = useQueryClient();
+  const pushEvent = useActivityLog((s) => s.push);
 
   React.useEffect(() => {
     if (!enabled || !paperId) return;
@@ -39,6 +41,10 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
 
     let es: EventSource | null = null;
     let cancelled = false;
+    const log = (
+      kind: Parameters<typeof pushEvent>[1],
+      message: string,
+    ) => pushEvent(paperId, kind, message);
 
     try {
       es = new EventSource(`/api/v1/papers/${paperId}/events`);
@@ -62,12 +68,13 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
       const d = safeParse<{ step: PipelineStep; step_index: number }>(e.data);
       if (!d) return;
       patchStatus({ step: d.step, step_index: d.step_index, status: "analyzing" });
+      log("step", `${humanStep(d.step)} started`);
     };
 
     const onStepCompleted = (e: MessageEvent) => {
       const d = safeParse<{ step: PipelineStep }>(e.data);
       if (!d) return;
-      // Leave the status unchanged; step.started for the next step follows.
+      log("step", `${humanStep(d.step)} done`);
     };
 
     const onStepFailed = (e: MessageEvent) => {
@@ -77,27 +84,37 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
       }>(e.data);
       if (!d) return;
       patchStatus({ status: "failed", step: d.step, error: d.error });
+      log("step", `${humanStep(d.step)} failed · ${d.error.message}`);
     };
 
-    const onFindingCreated = () => {
-      // Simplest: invalidate the detail query so it refetches with the new list.
+    const onFindingCreated = (e: MessageEvent) => {
+      const d = safeParse<{ finding?: Partial<Finding> }>(e.data);
       qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) });
-      // Also bump finding_count on status cache so the progress pill updates.
       qc.setQueryData<PaperStatusResponse>(paperKeys.status(paperId), (old) =>
         old ? { ...old, finding_count: old.finding_count + 1 } : old
       );
+      const f = d?.finding;
+      if (f) {
+        const issue = (f.issue_type ?? "issue").toString().replace(/_/g, " ");
+        const page = f.page ?? f.bbox_page ?? "?";
+        log("finding", `Found: ${issue} · p.${page}`);
+      } else {
+        log("finding", "New finding surfaced");
+      }
     };
 
     const onLocalizeCompleted = (e: MessageEvent) => {
       const d = safeParse<Partial<Finding> & { finding_id: string }>(e.data);
       if (!d) return;
       qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) });
+      log("localize", `Pinpointed a finding on the page`);
     };
 
     const onPipelineDone = () => {
       patchStatus({ status: "ready", step: "ready", step_index: 3 });
       qc.invalidateQueries({ queryKey: paperKeys.detail(paperId) });
       qc.invalidateQueries({ queryKey: paperKeys.list() });
+      log("run", "Scan complete");
       if (es) es.close();
     };
 
@@ -130,6 +147,11 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
         p.total_pages = d.total_pages;
         p.run_state = "running";
       });
+      const priorityCount = d.segments.filter((s) => (s.priority ?? 0) > 0).length;
+      log(
+        "outline",
+        `Outline ready · ${d.total_pages} pages, ${priorityCount} range${priorityCount === 1 ? "" : "s"} to scan`,
+      );
     };
 
     const setSegStatus = (segmentId: string, status: SegmentStatus) => {
@@ -144,6 +166,8 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
     const onSegmentStarted = (e: MessageEvent) => {
       const d = safeParse<Partial<Segment> & { segment_id: string }>(e.data);
       if (!d) return;
+      let segLabel: string | undefined;
+      let pageRange = "";
       patchPaper((p) => {
         const idx = p.segments?.findIndex((s) => s.segment_id === d.segment_id);
         if (p.segments && idx !== undefined && idx >= 0) {
@@ -153,13 +177,25 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
             status: "parsing",
             started_at: new Date().toISOString(),
           };
+          segLabel = p.segments[idx].label;
+          pageRange = `p.${p.segments[idx].page_start}–${p.segments[idx].page_end}`;
         }
       });
+      if (segLabel)
+        log("segment", `Parsing ${segLabel} · ${pageRange}`);
     };
 
     const onSegmentExtracted = (e: MessageEvent) => {
       const d = safeParse<{ segment_id: string }>(e.data);
-      if (d) setSegStatus(d.segment_id, "extracting");
+      if (!d) return;
+      setSegStatus(d.segment_id, "extracting");
+      const paper = qc.getQueryData<Paper>(paperKeys.detail(paperId));
+      const seg = paper?.segments?.find((s) => s.segment_id === d.segment_id);
+      if (seg)
+        log(
+          "segment",
+          `Checking proofs in ${seg.label} · p.${seg.page_start}–${seg.page_end}`,
+        );
     };
 
     const onSegmentCompleted = (e: MessageEvent) => {
@@ -169,6 +205,8 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
         skipped?: boolean;
       }>(e.data);
       if (!d) return;
+      let segLabel: string | undefined;
+      let pageRange = "";
       patchPaper((p) => {
         const idx = p.segments?.findIndex((s) => s.segment_id === d.segment_id);
         if (p.segments && idx !== undefined && idx >= 0) {
@@ -179,8 +217,15 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
             cost_subtotal_usd:
               d.cost_subtotal_usd ?? p.segments[idx].cost_subtotal_usd,
           };
+          segLabel = p.segments[idx].label;
+          pageRange = `p.${p.segments[idx].page_start}–${p.segments[idx].page_end}`;
         }
       });
+      if (segLabel)
+        log(
+          "segment",
+          `${d.skipped ? "Skipped" : "Done"} ${segLabel} · ${pageRange}`,
+        );
     };
 
     const onCostUpdated = (e: MessageEvent) => {
@@ -196,10 +241,10 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
             markup_factor: 1.35,
             estimate_remaining_raw_usd: 0,
             estimate_total_raw_usd: d.running_raw_usd,
-            breakdown: {
-              by_stage: { outline: 0, mineru_gpu: 0, extract: 0, verify: 0, localize: 0 },
-              llm_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 },
-            },
+            estimate_total_billed_usd: d.running_billed_usd,
+            by_stage: {},
+            by_segment: [],
+            llm_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 },
           };
         return {
           ...old,
@@ -216,6 +261,7 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
       });
       if (state === "completed")
         qc.invalidateQueries({ queryKey: paperKeys.list() });
+      log("run", humanRunState(state));
     };
 
     es.addEventListener("outline.ready", onOutlineReady);
@@ -227,6 +273,22 @@ export function useAnalysisStream(paperId: string, enabled: boolean) {
     es.addEventListener("run.stopped", onRunState("stopped"));
     es.addEventListener("run.resumed", onRunState("running"));
     es.addEventListener("run.completed", onRunState("completed"));
+
+    const onReanalyzeStarted = (e: MessageEvent) => {
+      const d = safeParse<{ proof_block_count?: number }>(e.data);
+      const n = d?.proof_block_count ?? 0;
+      log(
+        "run",
+        `Re-analysis started${n ? ` · re-verifying ${n} proof block${n === 1 ? "" : "s"}` : ""}`,
+      );
+    };
+    const onReanalyzeCompleted = (e: MessageEvent) => {
+      const d = safeParse<{ new_findings?: number }>(e.data);
+      const n = d?.new_findings ?? 0;
+      log("run", `Re-analysis done · ${n} new finding${n === 1 ? "" : "s"}`);
+    };
+    es.addEventListener("run.reanalyze_started", onReanalyzeStarted);
+    es.addEventListener("run.reanalyze_completed", onReanalyzeCompleted);
 
     es.onerror = () => {
       // Don't thrash; polling covers this case.
@@ -245,5 +307,37 @@ function safeParse<T>(raw: string): T | null {
     return JSON.parse(raw) as T;
   } catch {
     return null;
+  }
+}
+
+function humanStep(step: PipelineStep): string {
+  switch (step) {
+    case "parse":
+      return "Parsing PDF";
+    case "extract_proofs":
+      return "Extracting proofs";
+    case "verify_proofs":
+      return "Verifying proofs";
+    case "ready":
+      return "Ready";
+    case "failed":
+      return "Failed";
+    default:
+      return String(step);
+  }
+}
+
+function humanRunState(state: RunState): string {
+  switch (state) {
+    case "running":
+      return "Run resumed";
+    case "stopped":
+      return "Run stopped";
+    case "paused":
+      return "Run paused";
+    case "completed":
+      return "Run complete";
+    default:
+      return String(state);
   }
 }

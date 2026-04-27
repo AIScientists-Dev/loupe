@@ -2,27 +2,49 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List
+import json as _json
+import logging
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
 from app.models import (
+    BatchAction,
+    BatchRequest,
+    BatchResponse,
+    BatchResultItem,
+    BatchResultSummary,
     CostReport,
     DecideRequest,
+    Dimension,
+    DimensionScore,
     Finding,
+    FinalizeReviewResponse,
+    FlagPatchRequest,
+    FolderPatchRequest,
     InvestigateRequest,
     LocalizeStatus,
     Paper,
+    PaperFlag,
     PaperStatusResponse,
     PaperSummary,
     PIPELINE_ORDER,
     PlaceRequest,
     ReviewDraft,
+    ReviewDraftSummary,
+    ReviewGenerateRequest,
     ReviewPatchRequest,
+    ReviewStyleSnapshot,
+    ScoresResponse,
+    Severity,
+    TriageReport,
+    VenueType,
 )
 from app.services.events import bus, format_sse
 from app.services.orchestrator import Orchestrator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/papers", tags=["papers"])
 
@@ -32,12 +54,54 @@ def _orch() -> Orchestrator:
     return get_orchestrator()
 
 
+# Score adjustments applied per kept (agreed) finding, by severity. Mirrors
+# the §3.3 formula in the v2 plan exactly. The frontend uses the same
+# numbers client-side for live updates as the user agrees/dismisses.
+_KEEP_PENALTY = {"high": -0.8, "medium": -0.4, "low": -0.2}
+_DISMISS_BONUS = 0.1   # small "false alarm" credit
+
+
+def _adjust_scores(
+    base: List[DimensionScore],
+    findings: List[Finding],
+) -> List[DimensionScore]:
+    """Return a copy of `base` with §3.3 adjustments applied per dimension.
+
+    `base.score` is the LLM-emitted 0..10 reflecting the raw findings; we
+    overlay the user's decisions on top. Dismissed → small credit, agreed →
+    severity-weighted penalty. Clamped to [0, 10].
+    """
+    by_id = {f.finding_id: f for f in findings}
+    out: List[DimensionScore] = []
+    for ds in base:
+        delta = 0.0
+        for fid in ds.finding_ids:
+            f = by_id.get(fid)
+            if not f or not f.decision:
+                continue
+            if f.decision.value == "dismiss":
+                delta += _DISMISS_BONUS
+            elif f.decision.value == "agree":
+                delta += _KEEP_PENALTY.get(f.severity.value, 0.0)
+        out.append(DimensionScore(
+            dimension=ds.dimension,
+            score=round(max(0.0, min(10.0, ds.score + delta)), 2),
+            rationale=ds.rationale,
+            finding_ids=list(ds.finding_ids),
+        ))
+    return out
+
+
 # -- CRUD ---------------------------------------------------------------------
 
 @router.post("", response_model=Paper)
 async def create_paper(
     background: BackgroundTasks,
     file: UploadFile = File(...),
+    venue_type: Optional[str] = Form(None),
+    venue_name: Optional[str] = Form(None),
+    folder: Optional[str] = Form(None),
+    review_style: Optional[str] = Form(None),  # JSON-encoded ReviewStyleSnapshot
     orch: Orchestrator = Depends(_orch),
 ):
     if file.content_type not in ("application/pdf", "application/octet-stream", None):
@@ -46,8 +110,37 @@ async def create_paper(
     if not raw:
         raise HTTPException(400, detail={"code": "pdf_unreadable", "message": "Uploaded PDF is empty"})
 
-    paper = orch.create_paper(file.filename or "paper.pdf", raw)
-    background.add_task(orch.run_pipeline_task, paper.paper_id)
+    # Parse v2 multipart fields. All optional; the orchestrator falls back to
+    # journal/Inbox/None if missing so legacy upload flows keep working.
+    vt = VenueType.journal
+    if venue_type:
+        try:
+            vt = VenueType(venue_type)
+        except ValueError:
+            raise HTTPException(400, detail={
+                "code": "invalid_venue_type",
+                "message": f"venue_type must be one of {[v.value for v in VenueType]}",
+            })
+
+    style: Optional[ReviewStyleSnapshot] = None
+    if review_style:
+        try:
+            style = ReviewStyleSnapshot(**_json.loads(review_style))
+        except Exception as e:
+            logger.warning("create_paper: ignoring malformed review_style: %s", e)
+            style = None
+
+    paper = orch.create_paper(
+        file.filename or "paper.pdf",
+        raw,
+        venue_type=vt,
+        venue_name=venue_name or None,
+        folder=folder or "Inbox",
+        review_style=style,
+    )
+    # v2: upload kicks the triage pass (~60s, ≤$0.05). The full deep dive
+    # only fires on POST /dive-deep, after the user reviews the triage card.
+    background.add_task(orch.triage_task, paper.paper_id)
     return paper
 
 
@@ -69,6 +162,219 @@ def delete_paper(paper_id: str, orch: Orchestrator = Depends(_orch)):
     if not orch.delete_paper(paper_id):
         raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
     return Response(status_code=204)
+
+
+# -- v2 triage / dive-deep ---------------------------------------------------
+
+@router.get("/{paper_id}/triage", response_model=TriageReport)
+def get_triage(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    """Returns the triage report once it's been computed. 404 until the
+    triage task lands. Frontend polls or relies on `triage.completed` SSE."""
+    paper = orch.get_paper(paper_id)
+    if not paper:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    if not paper.triage:
+        raise HTTPException(404, detail={
+            "code": "triage_pending",
+            "message": "Triage has not completed yet",
+        })
+    return paper.triage
+
+
+@router.post("/{paper_id}/dive-deep", response_model=Paper, status_code=202)
+def dive_deep_run(
+    paper_id: str,
+    background: BackgroundTasks,
+    orch: Orchestrator = Depends(_orch),
+):
+    """Kick the deep-dive pipeline (parse + extract + verify + dimension
+    passes). Idempotent: re-calling while diving/dived is a no-op."""
+    paper, scheduled = orch.dive_deep(paper_id)
+    if paper is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    if scheduled:
+        background.add_task(orch.run_pipeline_task, paper_id)
+    return paper
+
+
+@router.get("/{paper_id}/scores", response_model=ScoresResponse)
+def get_scores(paper_id: str, orch: Orchestrator = Depends(_orch)):
+    """Snapshot of per-dimension scores adjusted by current decisions.
+
+    The frontend computes the same adjustment client-side for live updates;
+    this endpoint exists so a fresh page load (or share view) starts from
+    the right number without recomputing in the browser. `frozen=true` once
+    finalize-review has been called.
+
+    Base scores are re-derived from `_compute_base_scores(paper)` on every
+    call rather than read from the persisted snapshot. This keeps /scores
+    robust to formula changes (the prior formula penalized findings into
+    the base, which double-counted once `_adjust_scores` overlaid the
+    decisions). Once `final_score` is frozen we still return the persisted
+    snapshot so the freeze stays exactly where the user left it.
+    """
+    paper = orch.get_paper(paper_id)
+    if not paper:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+
+    if paper.final_score is not None:
+        # Frozen — return persisted scores verbatim so the radar doesn't shift.
+        dims = list(paper.dimension_scores)
+        aggregate = paper.final_score
+    else:
+        # Live — recompute base, overlay current decisions.
+        base = Orchestrator._compute_base_scores(paper)
+        dims = _adjust_scores(base, paper.findings)
+        aggregate = round(sum(d.score for d in dims) / len(dims), 2) if dims else 0.0
+    return ScoresResponse(
+        dimensions=dims,
+        aggregate=aggregate,
+        frozen=paper.final_score is not None,
+    )
+
+
+@router.patch("/{paper_id}/folder", response_model=Paper)
+def patch_folder(
+    paper_id: str,
+    req: FolderPatchRequest,
+    orch: Orchestrator = Depends(_orch),
+):
+    paper = orch.set_folder(paper_id, req.folder)
+    if paper is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return paper
+
+
+@router.post("/{paper_id}/flag", response_model=Paper)
+def post_flag(
+    paper_id: str,
+    req: FlagPatchRequest,
+    orch: Orchestrator = Depends(_orch),
+):
+    """v3 — set/clear the user flag (Promising / Rejected). Idempotent set,
+    not toggle: passing the same flag twice is a no-op; passing the
+    opposite flag overwrites; passing null clears."""
+    paper = orch.set_flag(paper_id, req.flag)
+    if paper is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return paper
+
+
+# -- v3 batch ----------------------------------------------------------------
+
+@router.post("/batch", response_model=BatchResponse)
+def batch_action(
+    req: BatchRequest,
+    background: BackgroundTasks,
+    orch: Orchestrator = Depends(_orch),
+):
+    """Apply one action to N papers. Per-paper success/failure rolls up in
+    `results`; `summary` gives counts. Idempotent operations (dive_deep on
+    a diving/dived paper, flag matching the current value) report
+    `ok=true skipped=true` rather than failing.
+
+    Dive-deep schedules the runner via FastAPI BackgroundTasks (same path
+    as POST /dive-deep), so this returns quickly with the umbrella result;
+    per-paper progress flows over the existing SSE channels.
+    """
+    bus.emit("_global", "dive.batch.started" if req.action == BatchAction.dive_deep else f"batch.{req.action.value}.started", {
+        "paper_ids": req.ids, "total": len(req.ids),
+    })
+
+    results: list[BatchResultItem] = []
+
+    for pid in req.ids:
+        try:
+            if req.action == BatchAction.dive_deep:
+                paper, scheduled = orch.dive_deep(pid)
+                if paper is None:
+                    results.append(BatchResultItem(paper_id=pid, ok=False, error="not_found"))
+                    continue
+                if scheduled:
+                    background.add_task(orch.run_pipeline_task, pid)
+                    results.append(BatchResultItem(paper_id=pid, ok=True))
+                else:
+                    # Already diving/dived — silent skip per spec.
+                    results.append(BatchResultItem(paper_id=pid, ok=True, skipped=True))
+
+            elif req.action == BatchAction.flag:
+                raw_flag = (req.payload or {}).get("flag")
+                flag_value: PaperFlag | None = None
+                if raw_flag is not None:
+                    try:
+                        flag_value = PaperFlag(raw_flag)
+                    except ValueError:
+                        results.append(BatchResultItem(paper_id=pid, ok=False, error=f"invalid flag: {raw_flag!r}"))
+                        continue
+                paper = orch.set_flag(pid, flag_value)
+                if paper is None:
+                    results.append(BatchResultItem(paper_id=pid, ok=False, error="not_found"))
+                else:
+                    results.append(BatchResultItem(paper_id=pid, ok=True))
+
+            elif req.action == BatchAction.set_folder:
+                folder = (req.payload or {}).get("folder")
+                # Validate against the folder store: explicit name must exist.
+                if folder is not None:
+                    cleaned = str(folder).strip() or None
+                    if cleaned is not None and orch.folder_store.get(cleaned) is None:
+                        results.append(BatchResultItem(paper_id=pid, ok=False, error=f"folder not found: {cleaned!r}"))
+                        continue
+                    folder = cleaned
+                paper = orch.set_folder(pid, folder)
+                if paper is None:
+                    results.append(BatchResultItem(paper_id=pid, ok=False, error="not_found"))
+                else:
+                    results.append(BatchResultItem(paper_id=pid, ok=True))
+
+            elif req.action == BatchAction.delete:
+                if orch.delete_paper(pid):
+                    results.append(BatchResultItem(paper_id=pid, ok=True))
+                else:
+                    results.append(BatchResultItem(paper_id=pid, ok=False, error="not_found"))
+
+            else:
+                results.append(BatchResultItem(paper_id=pid, ok=False, error=f"unknown action: {req.action}"))
+
+            # Per-paper progress for live UI feedback in dive_deep batches.
+            if req.action == BatchAction.dive_deep:
+                last = results[-1]
+                bus.emit("_global", "dive.batch.progress", {
+                    "paper_id": pid,
+                    "ok": last.ok,
+                    "skipped": last.skipped,
+                    "error": last.error,
+                })
+
+        except Exception as e:
+            logger.exception("batch action %s failed for %s", req.action, pid)
+            results.append(BatchResultItem(paper_id=pid, ok=False, error=str(e)))
+
+    summary = BatchResultSummary(
+        ok=sum(1 for r in results if r.ok),
+        failed=sum(1 for r in results if not r.ok),
+    )
+    if req.action == BatchAction.dive_deep:
+        bus.emit("_global", "dive.batch.completed", {
+            "ok": summary.ok, "failed": summary.failed,
+        })
+
+    return BatchResponse(results=results, summary=summary)
+
+
+@router.post("/{paper_id}/finalize-review", response_model=FinalizeReviewResponse)
+async def finalize_review(
+    paper_id: str,
+    req: ReviewGenerateRequest,
+    orch: Orchestrator = Depends(_orch),
+):
+    """Freeze the aggregate score (§3.3) and generate the final draft."""
+    config = {k: v for k, v in req.model_dump().items() if v is not None}
+    result = await orch.finalize_review(paper_id, config)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    aggregate, draft_id = result
+    return FinalizeReviewResponse(aggregate=aggregate, draft_id=draft_id)
 
 
 # -- status -------------------------------------------------------------------
@@ -278,6 +584,23 @@ def resume_run(
     return result
 
 
+@router.post("/{paper_id}/reanalyze", response_model=Paper)
+def reanalyze_run(
+    paper_id: str,
+    background: BackgroundTasks,
+    orch: Orchestrator = Depends(_orch),
+):
+    result = orch.reanalyze(paper_id)
+    if result is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    # Skip budget cap for an explicit re-analyze — the user knows what they
+    # asked for and accepted the cost estimate in the confirm dialog.
+    from app.pipeline.runner import enable_budget_bypass
+    enable_budget_bypass(paper_id)
+    background.add_task(orch.reanalyze_task, paper_id)
+    return result
+
+
 @router.post("/{paper_id}/segments/{segment_id}/skip", response_model=Paper)
 def skip_segment(paper_id: str, segment_id: str, orch: Orchestrator = Depends(_orch)):
     result = orch.skip_segment(paper_id, segment_id)
@@ -377,12 +700,43 @@ async def investigate_finding_route(
 @router.post("/{paper_id}/review/generate", response_model=ReviewDraft)
 async def generate_review_route(
     paper_id: str,
+    req: ReviewGenerateRequest | None = None,
     orch: Orchestrator = Depends(_orch),
 ):
-    result = await orch.generate_review(paper_id)
+    config = req.model_dump(exclude_none=True) if req else {}
+    result = await orch.generate_review(paper_id, config=config)
     if result is None:
         raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
     return result
+
+
+@router.get("/{paper_id}/reviews", response_model=List[ReviewDraftSummary])
+def list_reviews_route(
+    paper_id: str,
+    orch: Orchestrator = Depends(_orch),
+):
+    drafts = orch.list_reviews(paper_id)
+    if drafts is None:
+        raise HTTPException(404, detail={"code": "not_found", "message": "Paper not found"})
+    return [_summarize_draft(d) for d in drafts]
+
+
+def _summarize_draft(d: ReviewDraft) -> ReviewDraftSummary:
+    import re
+    body = d.markdown or ""
+    # Strip markdown headings, list markers, blockquotes for a clean preview.
+    cleaned = re.sub(r"^#{1,6}\s+", "", body, flags=re.MULTILINE)
+    cleaned = re.sub(r"^[>\-\*]\s+", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    preview = cleaned[:140] + ("…" if len(cleaned) > 140 else "")
+    words = len(re.findall(r"\w+", body))
+    return ReviewDraftSummary(
+        draft_id=d.draft_id,
+        created_at=d.created_at,
+        updated_at=d.updated_at,
+        word_count=words,
+        preview=preview,
+    )
 
 
 @router.get("/{paper_id}/review/{draft_id}", response_model=ReviewDraft)

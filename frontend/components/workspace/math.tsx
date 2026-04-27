@@ -42,21 +42,85 @@ function rehypeMathUnicodeItalic() {
   return (tree: any) => walk(tree);
 }
 
-// Wrap bare LaTeX-ish patterns (b_{P,j}, D^{(η-1)/2}, M_t) in $...$ so KaTeX
-// can render them. Only applied to model-authored finding text.
-function wrapBareMath(text: string): string {
-  const saved: string[] = [];
-  let s = text.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+?\$/g, (m) => {
+// ASCII names we treat as LaTeX greek letters when they appear as standalone
+// words. Skewed toward letters that are unambiguous in technical prose —
+// "pi", "eta", "sigma" are almost always math; "xi" and "chi" less so but
+// still overwhelmingly math in this app's domain.
+const GREEK_NAMES =
+  "alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega";
+
+// Save existing $...$ and $$...$$ pairs into `saved` and replace with
+// placeholders so subsequent rewrites don't descend into already-wrapped
+// math. Idempotent: running it again on a string with no fresh pairs is a
+// no-op.
+function saveMathPairs(s: string, saved: string[]): string {
+  return s.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+?\$/g, (m) => {
     const idx = saved.length;
     saved.push(m);
     return `\x02${idx}\x02`;
   });
+}
+
+// Fix greek-letter words and `grad`→\nabla inside content we're about to
+// wrap in math delimiters. Called on the INNER of `||...||` so the norm
+// renders as \|\nabla f(x_t)\|^2 rather than \|grad f(x_t)\|^2.
+function rewriteInnerMathTokens(inner: string): string {
+  let out = inner.replace(/\bgrad\b/g, "\\nabla ");
+  const greekRe = new RegExp(
+    `(?<![\\\\a-zA-Z])(${GREEK_NAMES})(?![a-zA-Z])`,
+    "g"
+  );
+  out = out.replace(greekRe, (_, name) => `\\${name}`);
+  return out;
+}
+
+// Wrap bare LaTeX-ish patterns so KaTeX can render them. Handles:
+//   b_{P,j}, D^{(η-1)/2}, M_t      (existing)
+//   ||grad f(x_t)||^2 → \|\nabla f(x_t)\|^2
+//   sigma, eta^2, \Omega_n          (greek names)
+//   n^2                              (bare letter ^ digit)
+// Each pass re-saves $...$ pairs so later passes never reach into prior
+// wraps. Only applied to model-authored finding text.
+function wrapBareMath(text: string): string {
+  const saved: string[] = [];
+  let s = saveMathPairs(text, saved);
+
+  // Norms first: consume `||...||^N` as a whole so inner subscripts/greek
+  // letters end up inside one $...$ block rather than fragmenting.
+  s = s.replace(
+    /\|\|([^|\n]{1,120}?)\|\|(\^\{[^}]+\}|\^[0-9a-zA-Z]+|_\{[^}]+\}|_[0-9a-zA-Z]+)?/g,
+    (_, inner, mod) => `$\\|${rewriteInnerMathTokens(inner)}\\|${mod ?? ""}$`
+  );
+  s = saveMathPairs(s, saved);
+
   s = s.replace(/([\w\u0300-\u036F\u0370-\u03FF]+_\{[^}]+\})/g, (m) => `$${m}$`);
+  s = saveMathPairs(s, saved);
+
   s = s.replace(/([\w\u0370-\u03FF]+\^\{[^}]+\})/g, (m) => `$${m}$`);
+  s = saveMathPairs(s, saved);
+
   s = s.replace(
     /(?<![a-zA-Z_])([A-Za-z\u0370-\u03FF]_[a-zA-Z0-9])(?![a-zA-Z_\{])/g,
     (m) => `$${m}$`
   );
+  s = saveMathPairs(s, saved);
+
+  // Greek letter names. Negative lookbehind blocks `\sigma` (already a
+  // command) and mid-word matches ("asymptote" must not become "a$\sigma$…").
+  const greekRe = new RegExp(
+    `(?<![\\\\a-zA-Z])(${GREEK_NAMES})(?![a-zA-Z])(\\^\\{[^}]+\\}|\\^[0-9a-zA-Z]+|_\\{[^}]+\\}|_[0-9a-zA-Z]+)?`,
+    "g"
+  );
+  s = s.replace(greekRe, (_, name, mod) => `$\\${name}${mod ?? ""}$`);
+  s = saveMathPairs(s, saved);
+
+  // Bare `x^N` where N is digits. Guard against `_{`, `${`, and letters on
+  // either side so we don't split mid-identifier or inside placeholders.
+  s = s.replace(
+    /(?<![\\$a-zA-Z_{\x02])([a-zA-Z])\^([0-9]+)(?![a-zA-Z0-9])/g,
+    (_, v, sup) => `$${v}^${sup}$`
+  );
+
   s = s.replace(/\x02(\d+)\x02/g, (_, idx) => saved[parseInt(idx)]);
   return s;
 }

@@ -130,6 +130,48 @@ class ExchangeRole(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# v2 review-flow enums (triage → deep dive → multi-dimensional scoring)
+# ---------------------------------------------------------------------------
+
+class VenueType(str, Enum):
+    journal = "journal"
+    conference = "conference"
+    grant = "grant"          # NSF / NIH / etc.
+    thesis = "thesis"
+    other = "other"
+
+
+class Dimension(str, Enum):
+    proof = "proof"
+    literature = "literature"
+    clarity = "clarity"
+    numerical = "numerical"
+    relevance = "relevance"
+    novelty = "novelty"
+
+
+class TriageVerdict(str, Enum):
+    high = "high"      # worth deep diving
+    medium = "medium"
+    low = "low"
+
+
+class ReviewStage(str, Enum):
+    uploaded = "uploaded"     # no triage yet
+    triaging = "triaging"
+    triaged = "triaged"       # triage done, no dive yet
+    diving = "diving"         # deep dive in progress
+    dived = "dived"           # deep dive complete
+
+
+class PaperFlag(str, Enum):
+    """v3 user flag — orthogonal to `stage`. A paper can be flagged at any
+    point in its lifecycle. `None` = unflagged (the default)."""
+    promising = "promising"
+    rejected = "rejected"
+
+
+# ---------------------------------------------------------------------------
 # Core data objects
 # ---------------------------------------------------------------------------
 
@@ -199,6 +241,10 @@ class Finding(BaseModel):
     exchanges: List[Exchange] = Field(default_factory=list)
     soft_deleted: bool = False
     created_at: str = Field(default_factory=_utc_now)
+    # v2: which review dimension this finding contributes to. Defaults to
+    # "proof" so legacy data (verify_proofs output) deserializes without a
+    # migration touching every record.
+    dimension: Dimension = Dimension.proof
 
 
 class ReviewDraft(BaseModel):
@@ -206,6 +252,49 @@ class ReviewDraft(BaseModel):
     markdown: str
     created_at: str = Field(default_factory=_utc_now)
     updated_at: str = Field(default_factory=_utc_now)
+
+
+# ---------------------------------------------------------------------------
+# v2 review-flow data objects
+# ---------------------------------------------------------------------------
+
+class TriageReport(BaseModel):
+    """Output of the upload-time triage pass. Drives the H/M/L badge and the
+    "Dive Deep" decision in the workspace shell."""
+    scope: str                       # 1-2 sentences: what does the paper claim?
+    novelty: str                     # 2-3 sentences vs prior work
+    venue_match: str                 # 1-2 sentences re fit to declared venue
+    summary: str                     # 3-4 sentences review-summary preview
+    verdict: TriageVerdict
+    confidence: float = Field(ge=0.0, le=1.0)
+    cost_usd: float = 0.0
+    generated_at: str = Field(default_factory=_utc_now)
+
+
+class DimensionScore(BaseModel):
+    """One axis of the per-paper score. Six instances populate the radar.
+
+    `score` is the LLM-emitted base value 0..10; the frontend applies the
+    decision-driven adjustment (§3.3 of the v2 plan) live as the user
+    agrees/dismisses findings. Server re-applies the same formula at
+    finalize-review time and freezes the result on Paper.final_score.
+    """
+    dimension: Dimension
+    score: float = Field(ge=0.0, le=10.0)
+    rationale: str                                # 1-2 sentences
+    finding_ids: List[str] = Field(default_factory=list)
+
+
+class ReviewStyleSnapshot(BaseModel):
+    """Style choices captured at upload time. Mirrors frontend ReviewConfig
+    (which is shaped like the existing /review/generate body). Persisted on
+    the paper so finalize-review can reproduce the same voice without
+    requiring the user to re-pick."""
+    field: Optional[str] = None
+    style: Optional[str] = None       # rigorous_skeptical | constructive_mentoring | terse_expert
+    tone: Optional[str] = None        # formal | neutral | casual
+    length: Optional[str] = None      # short | standard | thorough
+    sections: Optional[List[str]] = None
 
 
 class Segment(BaseModel):
@@ -277,6 +366,27 @@ class Paper(BaseModel):
     created_at: str = Field(default_factory=_utc_now)
     updated_at: str = Field(default_factory=_utc_now)
 
+    # ---------- v2: triage → deep dive → multi-dimensional scoring ----------
+    # Captured at upload; defaults keep legacy papers loadable.
+    venue_type: VenueType = VenueType.journal
+    venue_name: Optional[str] = None              # "JASA", "NeurIPS", "NSF DMS"
+    # v3: folder is now optional. Papers without a folder show under "All"
+    # in the sidebar. The default seed/migration moves legacy `Inbox` → None.
+    folder: Optional[str] = None                   # logical grouping for library list
+    review_style: Optional[ReviewStyleSnapshot] = None
+    # Two-stage flow state.
+    triage: Optional[TriageReport] = None
+    stage: ReviewStage = ReviewStage.uploaded
+    # Per-dimension base scores from the deep-dive passes. Frontend applies
+    # the decision-driven adjustment live; backend re-derives at finalize.
+    dimension_scores: List[DimensionScore] = Field(default_factory=list)
+    # Frozen aggregate after finalize-review. None until then.
+    final_score: Optional[float] = None
+
+    # v3: user flag — Promising / Rejected status, orthogonal to `stage`.
+    # At most one at a time (set-clears-the-other), per the spec.
+    flag: Optional[PaperFlag] = None
+
     # -- helpers -----------------------------------------------------------
     def finding(self, finding_id: str) -> Optional[Finding]:
         for f in self.findings:
@@ -338,6 +448,17 @@ class PaperSummary(BaseModel):
     finding_count: int
     decided_count: int
     created_at: str
+    # v2 fields — included so the library can render badges + folders without
+    # a second round-trip per paper. Optional to keep legacy summaries valid.
+    venue_type: Optional[VenueType] = None
+    venue_name: Optional[str] = None
+    folder: Optional[str] = None
+    stage: Optional[ReviewStage] = None
+    triage_verdict: Optional[TriageVerdict] = None
+    final_score: Optional[float] = None
+    # v3 flag — surfaced for status-folder counts (Promising/Rejected) on the
+    # library sidebar. Frontend filters the list client-side from this field.
+    flag: Optional[PaperFlag] = None
 
 
 class PaperStatusResponse(BaseModel):
@@ -367,14 +488,148 @@ class PlaceRequest(BaseModel):
 
 
 class ReviewGenerateRequest(BaseModel):
-    # placeholder knobs — kept minimal for prototype
-    venue: Optional[str] = None
-    tone: Optional[str] = None
-    length: Optional[str] = None
+    # Reviewer persona knobs. All optional — when omitted, the prompt falls
+    # back to a rigorous-skeptical default so the one-click path still works.
+    field: Optional[str] = None                 # e.g. "Statistics", "ML theory", or free text
+    style: Optional[str] = None                 # "rigorous_skeptical" | "constructive_mentoring" | "terse_expert"
+    tone: Optional[str] = None                  # "formal" | "neutral" | "casual"
+    length: Optional[str] = None                # "short" | "standard" | "thorough"
+    sections: Optional[List[str]] = None        # subset of {summary, strengths, weaknesses, detailed, questions, minor}
+    venue: Optional[str] = None                 # kept for forward-compat (not surfaced in UI yet)
 
 
 class ReviewPatchRequest(BaseModel):
     markdown: str
+
+
+class FolderPatchRequest(BaseModel):
+    """PATCH /papers/{id}/folder — move a paper into a different folder, or
+    pass null to remove it from any folder (paper shows under 'All')."""
+    folder: Optional[str] = None
+
+
+class FlagPatchRequest(BaseModel):
+    """POST /papers/{id}/flag. Setting promising/rejected clears the
+    opposite; passing null clears the current flag."""
+    flag: Optional[PaperFlag] = None
+
+
+# ---------------------------------------------------------------------------
+# v3: folders + onboarding
+# ---------------------------------------------------------------------------
+
+class Folder(BaseModel):
+    """User-defined folder for grouping papers in the library sidebar.
+
+    Stored on disk (data/folders.json) — replaces the v2 hardcoded list.
+    `is_default` folders are seeded at startup or by onboarding and cannot
+    be deleted (frontend can rename them).
+    """
+    name: str                           # canonical key, case-sensitive
+    venue_type: Optional[VenueType] = None  # cosmetic icon hint
+    created_at: str = Field(default_factory=_utc_now)
+    is_default: bool = False
+
+
+class FolderCreateRequest(BaseModel):
+    name: str
+    venue_type: Optional[VenueType] = None
+
+
+class FolderPatchBodyRequest(BaseModel):
+    """PATCH /v1/folders/{name} — rename and/or change icon hint."""
+    name: Optional[str] = None
+    venue_type: Optional[VenueType] = None
+
+
+class OnboardingProfile(BaseModel):
+    """v3 user profile captured on first visit. Single-user MVP — one
+    record at data/profile.json. When auth lands, key by user_id.
+
+    `name` is retained for forward compatibility but the v3 frontend no
+    longer collects it (privacy) — sends "Anonymous". Drop in a future
+    schema rev once auth replaces the personal field.
+    """
+    name: str = "Anonymous"
+    role: str                            # v3: "Title" — Faculty / Postdoc / PhD candidate / ...
+    field: str                           # "Statistics", "ML theory", ...
+    research_interests: List[str] = Field(default_factory=list)
+    default_venues: List[str] = Field(default_factory=list)
+    default_review_style: ReviewStyleSnapshot
+    completed_at: str = Field(default_factory=_utc_now)
+
+
+class OnboardingRequest(BaseModel):
+    """POST body for /v1/onboarding. `completed_at` is server-stamped, not
+    accepted from the client."""
+    name: str = "Anonymous"
+    role: str
+    field: str
+    research_interests: List[str] = Field(default_factory=list)
+    default_venues: List[str] = Field(default_factory=list)
+    default_review_style: ReviewStyleSnapshot
+
+
+# ---------------------------------------------------------------------------
+# v3 batch
+# ---------------------------------------------------------------------------
+
+class BatchAction(str, Enum):
+    dive_deep = "dive_deep"
+    flag = "flag"
+    set_folder = "set_folder"
+    delete = "delete"
+
+
+class BatchRequest(BaseModel):
+    """POST /v1/papers/batch. `payload` is action-specific:
+        dive_deep   → {} (ignored)
+        flag        → {"flag": "promising"|"rejected"|null}
+        set_folder  → {"folder": "<name>"|null}
+        delete      → {} (ignored)
+    """
+    ids: List[str]
+    action: BatchAction
+    payload: Dict = Field(default_factory=dict)
+
+
+class BatchResultItem(BaseModel):
+    paper_id: str
+    ok: bool
+    skipped: bool = False
+    error: Optional[str] = None
+
+
+class BatchResultSummary(BaseModel):
+    ok: int
+    failed: int
+
+
+class BatchResponse(BaseModel):
+    results: List[BatchResultItem]
+    summary: BatchResultSummary
+
+
+class ScoresResponse(BaseModel):
+    """GET /papers/{id}/scores. Frontend renders the radar from this."""
+    dimensions: List[DimensionScore]
+    aggregate: float = Field(ge=0.0, le=10.0)
+    frozen: bool
+
+
+class FinalizeReviewResponse(BaseModel):
+    """POST /papers/{id}/finalize-review — freezes score + generates draft."""
+    aggregate: float
+    draft_id: str
+
+
+class ReviewDraftSummary(BaseModel):
+    """Lightweight shape for the drafts-list UI. Omits full markdown."""
+    draft_id: str
+    created_at: str
+    updated_at: str
+    word_count: int
+    preview: str  # first ~140 chars of body, stripped of markdown headings
 
 
 # ---------------------------------------------------------------------------

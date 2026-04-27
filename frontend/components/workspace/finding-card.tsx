@@ -131,6 +131,9 @@ export function FindingCard(props: FindingCardProps) {
             <span className="text-muted-foreground">
               p.{finding.bbox?.page ?? finding.bbox_page ?? "?"}
             </span>
+            {finding.dimension && finding.dimension !== "proof" && (
+              <DimensionChip dimension={finding.dimension} />
+            )}
             <LocalizeBadge
               status={finding.localize_status}
               onPlace={props.onRequestPlacement}
@@ -143,7 +146,7 @@ export function FindingCard(props: FindingCardProps) {
           </div>
 
           <div className="mt-2.5 overflow-x-auto rounded-md border border-border/80 bg-muted/40 px-3 py-2 font-serif text-[13px] leading-relaxed text-foreground/85">
-            <MathMarkdown inline>{finding.evidence_quote}</MathMarkdown>
+            <MathMarkdown inline>{wrapIfLatex(finding.evidence_quote)}</MathMarkdown>
           </div>
 
           {props.readOnly ? (
@@ -272,6 +275,56 @@ export function FindingCard(props: FindingCardProps) {
   );
 }
 
+/**
+ * When the LLM emits a raw LaTeX expression with no `$...$` wrapper, KaTeX
+ * never renders it. Heuristic: if the string contains LaTeX command-like
+ * tokens (`\mathbb`, `\frac`, `\sum`, `\leq`, etc.) and doesn't already
+ * contain a `$`, wrap the whole thing as inline math.
+ *
+ * Safe for natural-language quotes: we only wrap when there's at least one
+ * backslash-command AND the input has no `$` we'd clobber.
+ */
+const _LATEX_SIGNAL_RE =
+  /\\(mathbb|mathbf|mathcal|mathrm|mathit|frac|sum|prod|int|sqrt|leq|geq|lesssim|gtrsim|exp|log|ln|sin|cos|tan|left|right|begin|end|alpha|beta|gamma|lambda|sigma|tau|epsilon|delta|varepsilon|varphi|rightarrow|leftarrow|cdot|bigcap|bigcup|operatorname|text|mid|langle|rangle|triangleq)/;
+
+/**
+ * v2: small inline chip rendered next to the issue type when the finding
+ * belongs to a non-proof dimension (literature/clarity/numerical/etc.).
+ * Suppressed for `dimension="proof"` since that's the default and adding a
+ * chip there would just be visual noise.
+ */
+function DimensionChip({ dimension }: { dimension: NonNullable<Finding["dimension"]> }) {
+  const tone =
+    dimension === "literature"
+      ? "border-primary/30 text-primary"
+      : dimension === "clarity"
+        ? "border-muted-foreground/30 text-muted-foreground"
+        : dimension === "numerical"
+          ? "border-severity-medium/30 text-severity-medium"
+          : dimension === "relevance"
+            ? "border-brand/30 text-brand"
+            : dimension === "novelty"
+              ? "border-highlight/40 text-highlight-foreground"
+              : "border-muted-foreground/30 text-muted-foreground";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium capitalize",
+        tone,
+      )}
+    >
+      {dimension}
+    </span>
+  );
+}
+
+function wrapIfLatex(s: string): string {
+  if (!s) return s;
+  if (s.includes("$")) return s;
+  if (!_LATEX_SIGNAL_RE.test(s)) return s;
+  return `$${s}$`;
+}
+
 function LocalizeBadge({
   status,
   onPlace,
@@ -375,35 +428,41 @@ function DecidedFooter({
     <motion.div
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mt-3 flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
+      className="mt-3 flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {finding.decision === "agree" ? (
-          <span className="inline-flex items-center gap-1.5 font-medium text-primary">
+          <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-primary">
             <ShieldCheck className="size-3.5" /> Agreed
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1.5 font-medium text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-muted-foreground">
             <ShieldOff className="size-3.5" /> Dismissed
           </span>
         )}
         {finding.decision_note && (
-          <span className="truncate text-muted-foreground">
+          <span
+            className="min-w-0 flex-1 truncate text-muted-foreground"
+            title={finding.decision_note}
+          >
             — {finding.decision_note}
           </span>
         )}
       </div>
-      {!readOnly && <Button
-        size="sm"
-        variant="ghost"
-        onClick={(e) => {
-          e.stopPropagation();
-          onReopen();
-        }}
-        disabled={busy}
-      >
-        <Undo2 className="size-3.5" /> Change
-      </Button>}
+      {!readOnly && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            onReopen();
+          }}
+          disabled={busy}
+        >
+          <Undo2 className="size-3.5" /> Reopen
+        </Button>
+      )}
     </motion.div>
   );
 }
@@ -428,23 +487,49 @@ function InvestigatePanel({
   ];
 
   const fire = async (msg: string) => {
-    if (!msg.trim()) return;
-    await onSend(msg.trim());
+    const trimmed = msg.trim();
+    if (!trimmed) return;
+    // Clear the textarea BEFORE the await so the user gets immediate visual
+    // feedback; the optimistic exchange (user msg + "…thinking" placeholder)
+    // appears in the thread via the mutation's onMutate hook.
     setText("");
+    try {
+      await onSend(trimmed);
+    } catch {
+      // Parent already surfaces a toast on failure; restore text so the user
+      // doesn't lose what they typed.
+      setText(trimmed);
+    }
   };
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mt-3 space-y-2"
+      className="relative mt-3 space-y-2"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex flex-wrap gap-1.5">
+      {/* Small close affordance — keeps the primary surface to a single
+          Send button while still giving users a way out of investigate mode. */}
+      <button
+        type="button"
+        onClick={onCancel}
+        title="Collapse follow-ups"
+        aria-label="Collapse follow-ups"
+        className="absolute right-0 top-0 inline-flex size-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <X className="size-3.5" />
+      </button>
+      <div className="flex flex-wrap gap-1.5 pr-6">
         {chips.map((c) => (
           <button
             key={c}
-            onClick={() => fire(c)}
+            type="button"
+            onClick={() =>
+              // Populate the textarea instead of auto-firing. User reviews,
+              // edits if they want, then clicks Send.
+              setText((prev) => (prev.trim() ? `${prev.trim()} — ${c}` : c))
+            }
             disabled={busy}
             className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
           >
@@ -471,14 +556,14 @@ function InvestigatePanel({
           {finding.exchanges.length} message
           {finding.exchanges.length === 1 ? "" : "s"} in thread · ⌘+↵ to send
         </span>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={onCancel}>
-            Done
-          </Button>
-          <Button size="sm" onClick={() => fire(text)} disabled={busy || !text.trim()}>
-            {busy && <Loader2 className="size-3 animate-spin" />} Send
-          </Button>
-        </div>
+        <Button
+          size="sm"
+          onClick={() => fire(text)}
+          disabled={busy || !text.trim()}
+          title={busy ? "Waiting for previous response…" : undefined}
+        >
+          Send
+        </Button>
       </div>
     </motion.div>
   );
@@ -490,23 +575,33 @@ function ExchangeThread({ exchanges }: { exchanges: Finding["exchanges"] }) {
       layout
       className="mt-3 space-y-2 border-t border-border/70 pt-3"
     >
-      {exchanges.map((x) => (
-        <div key={x.id} className="flex gap-2">
-          <div
-            className={cn(
-              "mt-0.5 inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[10px] font-medium uppercase tracking-wide",
-              x.role === "user"
-                ? "bg-primary/12 text-primary"
-                : "bg-muted text-muted-foreground"
+      {exchanges.map((x) => {
+        const isPending = x.id.startsWith("_opt_pending_");
+        return (
+          <div key={x.id} className="flex gap-2">
+            <div
+              className={cn(
+                "mt-0.5 inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[10px] font-medium uppercase tracking-wide",
+                x.role === "user"
+                  ? "bg-primary/12 text-primary"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              {x.role === "user" ? "You" : "Loupe"}
+            </div>
+            {isPending ? (
+              <div className="inline-flex items-center gap-2 text-[13px] italic text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" />
+                Louping…
+              </div>
+            ) : (
+              <div className="text-[13px] leading-relaxed text-foreground/90">
+                <MathMarkdown inline>{wrapIfLatex(x.text)}</MathMarkdown>
+              </div>
             )}
-          >
-            {x.role === "user" ? "You" : "Loupe"}
           </div>
-          <div className="text-[13px] leading-relaxed text-foreground/90">
-            <MathMarkdown inline>{x.text}</MathMarkdown>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </motion.div>
   );
 }

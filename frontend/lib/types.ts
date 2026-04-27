@@ -179,6 +179,10 @@ export interface Finding {
   decision?: Decision;
   decision_note?: string;
   exchanges: Exchange[];
+  /** v2: which review dimension this finding contributes to. Defaults to
+   * "proof" for findings created by the legacy pipeline (backend migration
+   * backfills existing data). */
+  dimension?: Dimension;
 }
 
 export interface Paper {
@@ -195,6 +199,20 @@ export interface Paper {
   total_pages?: number;
   outline_version?: string;
   budget_cap_usd?: number;
+  updated_at?: string;
+  // v2 fields — optional during migration; backend backfills existing papers.
+  venue_type?: VenueType;
+  venue_name?: string;
+  /** v3: nullable. Inbox is retired; null means Unfiled. */
+  folder?: string | null;
+  review_style?: ReviewStyleSnapshot;
+  triage?: TriageReport;
+  stage?: ReviewStage;
+  dimension_scores?: DimensionScore[];
+  /** Frozen aggregate score after finalize-review. Undefined until then. */
+  final_score?: number;
+  /** v3: per-paper flag (promising/rejected). Server-canonical. */
+  flag?: PaperFlag | null;
 }
 
 export interface PaperSummary {
@@ -205,6 +223,16 @@ export interface PaperSummary {
   created_at: string;
   finding_count: number;
   decided_count: number;
+  // v2 fields — optional so the library can render legacy summaries.
+  venue_type?: VenueType;
+  venue_name?: string;
+  /** v3: nullable. */
+  folder?: string | null;
+  stage?: ReviewStage;
+  triage_verdict?: TriageVerdict;     // surfaced for badge rendering on the list
+  final_score?: number;               // shown on the card if frozen
+  /** v3: per-paper flag. */
+  flag?: PaperFlag | null;
 }
 
 export interface PaperStatusResponse {
@@ -228,4 +256,179 @@ export interface ApiError {
 export interface DraftReview {
   draft_id: string;
   markdown: string;
+  created_at?: string;
+  updated_at?: string;
 }
+
+export interface DraftReviewSummary {
+  draft_id: string;
+  created_at: string;
+  updated_at: string;
+  word_count: number;
+  preview: string;
+}
+
+export type ReviewStyle =
+  | "rigorous_skeptical"
+  | "constructive_mentoring"
+  | "terse_expert";
+
+export type ReviewTone = "formal" | "neutral" | "casual";
+
+export type ReviewLength = "short" | "standard" | "thorough";
+
+export type ReviewSection =
+  | "summary"
+  | "strengths"
+  | "weaknesses"
+  | "detailed"
+  | "questions"
+  | "minor";
+
+export interface ReviewConfig {
+  field?: string;
+  style?: ReviewStyle;
+  tone?: ReviewTone;
+  length?: ReviewLength;
+  sections?: ReviewSection[];
+}
+
+// ---------------------------------------------------------------------------
+// v2: Two-stage review (Triage → Deep Dive) + multi-dimensional scoring.
+// Mirrors backend/app/models.py — keep in sync.
+// ---------------------------------------------------------------------------
+
+export type VenueType =
+  | "journal"
+  | "conference"
+  | "grant"   // NSF / NIH / etc.
+  | "thesis"
+  | "other";
+
+/** The six review dimensions surfaced as findings tags + radar axes. */
+export type Dimension =
+  | "proof"
+  | "literature"
+  | "clarity"
+  | "numerical"
+  | "relevance"
+  | "novelty";
+
+/** Triage outcome — drives the H/M/L verdict on whether to deep-dive. */
+export type TriageVerdict = "high" | "medium" | "low";
+
+export interface TriageReport {
+  scope: string;          // 1-2 sentences
+  novelty: string;        // 2-3 sentences vs prior work
+  venue_match: string;    // 1-2 sentences re fit to declared venue
+  summary: string;        // 3-4 sentences review-summary
+  verdict: TriageVerdict;
+  confidence: number;     // 0..1
+  cost_usd: number;
+  generated_at: string;
+}
+
+/** Per-dimension score with its rationale + the findings that drove it. */
+export interface DimensionScore {
+  dimension: Dimension;
+  score: number;          // 0..10 base score from deep-dive pass
+  rationale: string;      // 1-2 sentences
+  finding_ids: string[];  // findings tagged with this dimension
+}
+
+/** Lifecycle stage of a paper through the v2 pipeline. */
+export type ReviewStage =
+  | "uploaded"   // pre-triage (just uploaded)
+  | "triaging"   // triage in flight
+  | "triaged"    // triage done, awaiting user decision
+  | "diving"     // deep dive in flight
+  | "dived";     // deep dive complete
+
+/** Snapshot of scores returned by GET /scores. Frozen=true after finalize. */
+export interface ScoresResponse {
+  dimensions: DimensionScore[];
+  aggregate: number;      // 0..10 mean across dimensions
+  frozen: boolean;        // true once final review has been generated
+}
+
+export interface FinalizeReviewResponse {
+  aggregate: number;
+  draft_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// v3: Flags, Folders (object-shaped), Onboarding, Batch
+// ---------------------------------------------------------------------------
+
+export type PaperFlag = "promising" | "rejected";
+
+/** v3: /v1/folders returns Folder records, not bare strings. */
+export interface Folder {
+  name: string;
+  venue_type?: VenueType | null;
+  created_at: string;
+  is_default: boolean;
+}
+
+export interface OnboardingProfile {
+  name: string;
+  role: string;
+  field: string;
+  /** v3: free-form research-interest tags, e.g., ["high-dim statistics",
+   * "Bayesian inference"]. Drives prompt calibration once the backend
+   * persists it (currently optional / ignored on roundtrip). */
+  research_interests?: string[];
+  default_venues: string[];
+  default_review_style: ReviewStyleSnapshot;
+  completed_at: string;
+}
+
+/** v3 batch endpoint actions. Payload shape varies by action — see api.ts
+ * comments for the per-action expectations. */
+export type BatchAction = "dive_deep" | "flag" | "set_folder" | "delete";
+
+export interface BatchResultItem {
+  paper_id: string;
+  ok: boolean;
+  skipped: boolean;
+  error?: string | null;
+}
+
+export interface BatchResponse {
+  results: BatchResultItem[];
+  summary: { ok: number; failed: number };
+}
+
+/** Style snapshot persisted on a paper at upload time (mirrors ReviewConfig). */
+export type ReviewStyleSnapshot = ReviewConfig;
+
+/** Payload accepted by POST /papers (multipart). All optional except `file`. */
+export interface UploadPaperPayload {
+  file: File;
+  venue_type?: VenueType;
+  venue_name?: string;
+  folder?: string;
+  review_style?: ReviewStyleSnapshot;
+}
+
+// ---------------------------------------------------------------------------
+// LLM providers — drives the grouped picker in the settings panel.
+// Mirrors backend/app/routes/providers.py.
+// ---------------------------------------------------------------------------
+
+export interface ProviderModel {
+  id: string;
+  label: string;
+  note?: string | null;
+}
+
+export interface ProviderGroup {
+  id: "anthropic" | "openai" | "china" | "ollama" | "local" | string;
+  label: string;
+  kind: "cloud" | "local";
+  configured: boolean;
+  privacy: string;
+  hint?: string | null;
+  models: ProviderModel[];
+}
+

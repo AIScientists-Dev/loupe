@@ -36,5 +36,8 @@ data/
 .coverage
 htmlcov/
 cases/
-dev-note.md
+dev-note*.md
 e2e/
+
+# Internal proposals/specs (not for public repo)
+proposal/

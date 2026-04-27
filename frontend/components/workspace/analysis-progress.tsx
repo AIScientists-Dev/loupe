@@ -48,7 +48,7 @@ export function AnalysisProgress({
           <p className="mt-2 text-sm text-muted-foreground">
             {failed
               ? status.error?.message ?? "Something went wrong during analysis."
-              : "Loupe is reading the paper and surfacing suspicious proof steps. This usually takes 1–2 minutes."}
+              : "Loupe is reading the paper and surfacing suspicious proof steps. Proof-heavy papers typically take 15–25 minutes — you can leave this tab and come back."}
           </p>
         </div>
 

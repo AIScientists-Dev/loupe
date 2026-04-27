@@ -20,7 +20,7 @@ import logging
 from typing import Any, List
 
 from app.config import settings
-from app.models import Finding, IssueType, LocalizeStatus, Paper, ProofBlock, Severity
+from app.models import Dimension, Finding, IssueType, LocalizeStatus, Paper, ProofBlock, Severity
 from app.pipeline.text_anchor import normalize_loose, normalize_tight
 from app.services.events import bus
 from app.services.llm_client import LLMClient
@@ -261,6 +261,7 @@ def _item_to_finding(item: Any, block: ProofBlock, paper_markdown: str = "") -> 
                 localize_status=LocalizeStatus.quote_unverified,
                 visually_verified=False,
                 anchor_confidence="none",
+                dimension=Dimension.proof,
             )
         # Low/medium + unverifiable quote → honest drop, with a log entry
         # that includes the raw quote so we can audit the gate.
@@ -282,6 +283,7 @@ def _item_to_finding(item: Any, block: ProofBlock, paper_markdown: str = "") -> 
         bbox=block.bbox,
         localize_status=LocalizeStatus.pending,
         visually_verified=False,
+        dimension=Dimension.proof,
     )
 
 

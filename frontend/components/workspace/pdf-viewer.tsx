@@ -507,7 +507,7 @@ export function PdfViewer({
                       </div>
                     )}
                     <div
-                      className="pointer-events-none absolute inset-0"
+                      className="pointer-events-none absolute inset-0 z-10"
                       style={{
                         transform: `scale(${scale})`,
                         transformOrigin: "top left",
@@ -525,6 +525,7 @@ export function PdfViewer({
                           active={selectedFindingId === f.id}
                           onReopen={onReopenFinding}
                           onReplace={onReplacePlacement}
+                          onSelect={onSelectFinding}
                         />
                       ))}
                     </div>
@@ -576,6 +577,7 @@ function EvidenceCallout({
   active,
   onReopen,
   onReplace,
+  onSelect,
 }: {
   finding: Finding;
   pageEl: HTMLElement | null;
@@ -584,6 +586,7 @@ function EvidenceCallout({
   active: boolean;
   onReopen?: (id: string) => void;
   onReplace?: (id: string) => void;
+  onSelect?: (id: string) => void;
 }) {
   const quoteRects = useQuoteRects({
     pageEl,
@@ -619,17 +622,22 @@ function EvidenceCallout({
 
   const width = active ? STRIPE_WIDTH_ACTIVE : STRIPE_WIDTH;
 
-  // Color priority: decided state > severity. Decided findings get the
-  // agree/dismiss palette; otherwise severity color.
-  let stripeColor = severityVar;
-  let decidedLabel: string | null = null;
-  if (decided) {
-    const c = DECISION_COLORS[decided];
-    stripeColor = c.border;
-    decidedLabel = decided === "agree" ? "Agreed" : "Dismissed";
-  }
-
+  // Stripe color ALWAYS reflects severity — decided/dismissed should not
+  // overwrite the high/medium/low signal. The decision surfaces through the
+  // small icon next to the stripe + slight opacity muting.
+  const stripeColor = severityVar;
+  // Decision icon still uses the agree/dismiss palette for its own color.
+  const decisionIconColor = decided ? DECISION_COLORS[decided].border : stripeColor;
   const borderColor = stripeColor;
+  const stripeOpacity = approximate
+    ? 0.75
+    : pending
+    ? 0.55
+    : decided === "dismiss"
+    ? 0.45
+    : decided === "agree"
+    ? 0.65
+    : 1;
   const stripeStyle: React.CSSProperties = {
     left: STRIPE_X,
     top: yTop,
@@ -640,7 +648,7 @@ function EvidenceCallout({
     boxShadow: active
       ? `0 0 0 4px color-mix(in oklch, ${stripeColor} 22%, transparent)`
       : undefined,
-    opacity: approximate ? 0.75 : pending ? 0.55 : 1,
+    opacity: stripeOpacity,
   };
 
   // Approximate/pending stripes use a dashed-looking pattern via background-image.
@@ -656,16 +664,83 @@ function EvidenceCallout({
     color: decided ? borderColor : undefined,
   };
 
+  const stripeSummary = `${finding.severity.toUpperCase()} · ${finding.issue_type.replace(/_/g, " ")} · p.${finding.page ?? finding.bbox?.page ?? "?"}`;
+
   return (
     <>
       <motion.div
+        role="button"
+        tabIndex={0}
+        aria-label={`Select finding: ${stripeSummary}`}
+        title={`${stripeSummary} — click to view in panel`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect?.(finding.id);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect?.(finding.id);
+          }
+        }}
         initial={false}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.15 }}
-        className="absolute"
-        style={stripeStyle}
+        className="absolute cursor-pointer hover:brightness-125"
+        style={{ ...stripeStyle, pointerEvents: "auto" }}
       />
-      {(decided || approximate || userPlaced) && (
+      {decided && (
+        // Click target is 22×22pt (≈17px at typical zoom) with a generous
+        // invisible hit area so clicks land reliably. z-50 ensures we sit
+        // above PDF.js's text layer.
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onReopen?.(finding.id);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="group absolute z-50 flex size-[22px] items-center justify-center rounded-full"
+          style={{
+            left: STRIPE_X + width,
+            top: yTop - 4,
+            pointerEvents: "auto",
+          }}
+          aria-label={
+            decided === "agree"
+              ? "Agreed — click to reopen"
+              : "Dismissed — click to reopen"
+          }
+          title={
+            decided === "agree"
+              ? "Agreed — click to reopen"
+              : "Dismissed — click to reopen"
+          }
+        >
+          {/* Visible pill: 14×14 circle inside the larger click target */}
+          <span
+            className="flex size-[14px] items-center justify-center rounded-full border bg-background shadow-sm transition-transform group-hover:scale-110"
+            style={{
+              borderColor: decisionIconColor,
+              color: decisionIconColor,
+            }}
+          >
+            {decided === "agree" ? (
+              <Check className="size-2.5" />
+            ) : (
+              <XIcon className="size-2.5" />
+            )}
+          </span>
+          {/* Hover label: floating pill to the right explaining the action. */}
+          <span
+            className="pointer-events-none absolute left-[26px] top-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border bg-background px-2 py-0.5 text-[10px] font-medium text-foreground shadow-sm opacity-0 transition-opacity group-hover:opacity-100"
+            style={{ borderColor: decisionIconColor }}
+          >
+            {decided === "agree" ? "Agreed · click to reopen" : "Dismissed · click to reopen"}
+          </span>
+        </button>
+      )}
+      {!decided && (approximate || userPlaced) && (
         <div
           className="pointer-events-auto absolute"
           style={chipStyle}
@@ -675,29 +750,10 @@ function EvidenceCallout({
             className="inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-medium shadow-sm"
             style={{ borderColor }}
           >
-            {decided && (
-              <>
-                {decided === "agree" ? (
-                  <Check className="size-3" />
-                ) : (
-                  <XIcon className="size-3" />
-                )}
-                {decidedLabel}
-                {onReopen && (
-                  <button
-                    onClick={() => onReopen(finding.id)}
-                    className="ml-1 inline-flex items-center gap-0.5 rounded-sm border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-normal text-foreground/80 transition-colors hover:border-primary/50 hover:text-foreground"
-                    title="Reopen and change this decision"
-                  >
-                    <Undo2 className="size-2.5" /> Reopen
-                  </button>
-                )}
-              </>
-            )}
-            {!decided && approximate && (
+            {approximate && (
               <span className="text-muted-foreground">approximate location</span>
             )}
-            {!decided && userPlaced && (
+            {userPlaced && (
               <>
                 <span className="text-muted-foreground">manually placed</span>
                 {onReplace && (
@@ -936,15 +992,16 @@ function PdfToolbar({
           <Maximize2 className="size-3.5" />
         </Button>
       </div>
-      <div className="hidden items-center gap-1 md:flex">
+      <div className="flex items-center gap-1">
         <a
           href={`/api/v1/papers/${paperId}/pdf-annotated`}
           download
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-          title="Download the PDF with red boxes baked in as annotations"
+          aria-label="Download PDF with finding annotations"
+          title="Download — PDF with finding annotations baked in"
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <Download className="size-3" />
-          Download annotated PDF
+          <Download className="size-3.5" />
+          <span className="hidden sm:inline">Download</span>
         </a>
       </div>
     </div>

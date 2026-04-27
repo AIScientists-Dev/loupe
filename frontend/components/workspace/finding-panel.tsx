@@ -2,16 +2,34 @@
 
 import * as React from "react";
 import { AnimatePresence } from "framer-motion";
-import { Eye, EyeOff, SortAsc, X } from "lucide-react";
+import { Eye, EyeOff, History, SortAsc, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { useHotkeys } from "@/lib/hooks/use-hotkeys";
-import { useGlossary } from "@/lib/hooks/use-glossary";
 import { InfoTrigger } from "@/components/glossary/info-trigger";
 import { FindingCard } from "./finding-card";
-import type { Finding } from "@/lib/types";
+import { CostSummaryTrigger } from "./cost-drawer";
+import { api } from "@/lib/api";
+import type { Dimension, DraftReviewSummary, Finding } from "@/lib/types";
+
+const DIMENSION_FILTERS: Array<{ value: Dimension | "all"; label: string }> = [
+  { value: "all", label: "All dimensions" },
+  { value: "proof", label: "Proof" },
+  { value: "literature", label: "Literature" },
+  { value: "clarity", label: "Clarity" },
+  { value: "numerical", label: "Numerical" },
+  { value: "relevance", label: "Relevance" },
+  { value: "novelty", label: "Novelty" },
+];
 
 type FilterKey = "open" | "agreed" | "dismissed";
 type SortKey = "severity" | "page";
@@ -37,6 +55,7 @@ export function FindingPanel({
   onInvestigate,
   onRequestPlacement,
   onGenerateReview,
+  paperId,
   focusEdit,
   onClose,
   readOnly,
@@ -48,7 +67,10 @@ export function FindingPanel({
   onInvestigate: (id: string, message: string) => Promise<void>;
   /** Enter crosshair mode to manually place this finding on the PDF. */
   onRequestPlacement?: (id: string) => void;
-  onGenerateReview?: () => void;
+  /** Open the draft review dialog. Pass a draftId to load a historical draft. */
+  onGenerateReview?: (draftId?: string) => void;
+  /** Paper ID — required to fetch the draft history list. */
+  paperId?: string;
   focusEdit?: FocusEditSignal;
   /** When provided (narrow viewports), a close button renders in the header. */
   onClose?: () => void;
@@ -57,7 +79,7 @@ export function FindingPanel({
   const [filter, setFilter] = React.useState<FilterKey>("open");
   const [sort, setSort] = React.useState<SortKey>("severity");
   const [showDismissed, setShowDismissed] = React.useState(false);
-  const openGlossary = useGlossary((s) => s.openAt);
+  const [dimensionFilter, setDimensionFilter] = React.useState<Dimension | "all">("all");
 
   const counts = React.useMemo(() => {
     const c = { open: 0, agreed: 0, dismissed: 0 };
@@ -79,6 +101,11 @@ export function FindingPanel({
     if (filter !== "dismissed" && !showDismissed) {
       list = list.filter((f) => f.decision !== "dismiss");
     }
+    // v2: cross-cutting dimension filter — `proof` is the default for legacy
+    // findings, so we treat undefined as "proof" when filtering.
+    if (dimensionFilter !== "all") {
+      list = list.filter((f) => (f.dimension ?? "proof") === dimensionFilter);
+    }
     list.sort((a, b) => {
       if (sort === "severity")
         return SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
@@ -86,22 +113,9 @@ export function FindingPanel({
       return 0;
     });
     return list;
-  }, [findings, filter, sort, showDismissed]);
+  }, [findings, filter, sort, showDismissed, dimensionFilter]);
 
   const allDecided = counts.open === 0 && findings.length > 0;
-
-  const selectNextBy = React.useCallback(
-    (delta: 1 | -1) => {
-      if (!visible.length) return;
-      const idx = visible.findIndex((f) => f.id === selectedId);
-      const nextIdx =
-        idx === -1
-          ? 0
-          : Math.max(0, Math.min(visible.length - 1, idx + delta));
-      onSelect(visible[nextIdx].id);
-    },
-    [visible, selectedId, onSelect]
-  );
 
   // Scroll container + lookup for the selected card so we can align it to
   // the top after a decision auto-advances.
@@ -148,32 +162,6 @@ export function FindingPanel({
     };
   }, [selectedId, visible.length, focusEdit?.v]);
 
-  // Minimal hotkeys: navigation + glossary. Decision shortcuts were removed —
-  // they bypassed the note textarea, which confused the decide flow.
-  useHotkeys([
-    {
-      keys: ["j", "ArrowDown"],
-      handler: (e) => {
-        e.preventDefault();
-        selectNextBy(1);
-      },
-    },
-    {
-      keys: ["k", "ArrowUp"],
-      handler: (e) => {
-        e.preventDefault();
-        selectNextBy(-1);
-      },
-    },
-    {
-      keys: ["h"],
-      handler: (e) => {
-        e.preventDefault();
-        openGlossary();
-      },
-    },
-  ]);
-
   // Reopen flow: when focusEdit fires, switch filter to the decided tab so
   // the target card is rendered, then pass a commandSignal to open editing
   // mode in the right verdict.
@@ -183,6 +171,19 @@ export function FindingPanel({
     onSelect(focusEdit.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusEdit?.v]);
+
+  // When the PDF (or any external source) selects a finding that's hidden by
+  // the current filter, auto-switch to the tab that contains it so the card
+  // actually renders and can be scrolled into view.
+  React.useEffect(() => {
+    if (!selectedId) return;
+    const f = findings.find((x) => x.id === selectedId);
+    if (!f) return;
+    const targetFilter: FilterKey =
+      f.decision === "agree" ? "agreed" : f.decision === "dismiss" ? "dismissed" : "open";
+    if (targetFilter !== filter) setFilter(targetFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-background">
@@ -209,6 +210,11 @@ export function FindingPanel({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {paperId && <CostSummaryTrigger paperId={paperId} />}
+          <DimensionDropdown
+            value={dimensionFilter}
+            onChange={setDimensionFilter}
+          />
           <SortDropdown value={sort} onChange={setSort} />
           {onClose && (
             <Button
@@ -225,7 +231,11 @@ export function FindingPanel({
 
       <div ref={listRef} className="flex-1 space-y-2.5 overflow-y-auto p-4">
         {visible.length === 0 ? (
-          <EmptyFilter filter={filter} />
+          <EmptyFilter
+            filter={filter}
+            totalFindings={findings.length}
+            openCount={counts.open}
+          />
         ) : (
           <AnimatePresence initial={false}>
             {visible.map((f) => (
@@ -273,17 +283,124 @@ export function FindingPanel({
           <span className="text-xs text-muted-foreground">
             {counts.agreed + counts.dismissed}/{findings.length} decided
           </span>
-          <Button
-            size="sm"
-            disabled={!allDecided}
-            onClick={() => onGenerateReview?.()}
-          >
-            Generate review
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {paperId && (
+              <ReviewHistoryMenu
+                paperId={paperId}
+                onPick={(draftId) => onGenerateReview?.(draftId)}
+              />
+            )}
+            <Button
+              size="sm"
+              disabled={!allDecided}
+              onClick={() => onGenerateReview?.()}
+            >
+              Generate review
+            </Button>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function ReviewHistoryMenu({
+  paperId,
+  onPick,
+}: {
+  paperId: string;
+  onPick: (draftId: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [drafts, setDrafts] = React.useState<DraftReviewSummary[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  // Refetch every time the menu opens so the list is always current — drafts
+  // are created asynchronously by the backend, not only in response to the UI.
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    api
+      .listReviews(paperId)
+      .then((list) => {
+        if (!cancelled) setDrafts(list);
+      })
+      .catch(() => {
+        if (!cancelled) setDrafts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, paperId]);
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="size-8 p-0"
+          aria-label="Review history"
+          title="Previous reviews"
+        >
+          <History className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Previous drafts
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {loading ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">Loading…</div>
+        ) : !drafts || drafts.length === 0 ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            No drafts yet. Generate one to see it here.
+          </div>
+        ) : (
+          drafts.map((d) => (
+            <DropdownMenuItem
+              key={d.draft_id}
+              onSelect={() => onPick(d.draft_id)}
+              className="flex-col items-start gap-0.5"
+            >
+              <div className="flex w-full items-center justify-between gap-2">
+                <span className="text-xs font-medium text-foreground">
+                  {fmtRelative(d.updated_at)}
+                </span>
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {d.word_count}w
+                </span>
+              </div>
+              <div className="line-clamp-2 text-[11px] text-muted-foreground">
+                {d.preview || "(empty)"}
+              </div>
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function fmtRelative(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return iso;
+  const diff = Date.now() - then;
+  const s = Math.round(diff / 1000);
+  if (s < 10) return "Just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(then).toLocaleDateString();
 }
 
 function CountPill({ n }: { n: number }) {
@@ -295,6 +412,29 @@ function CountPill({ n }: { n: number }) {
     >
       {n}
     </span>
+  );
+}
+
+function DimensionDropdown({
+  value,
+  onChange,
+}: {
+  value: Dimension | "all";
+  onChange: (v: Dimension | "all") => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as Dimension | "all")}
+      className="h-7 shrink-0 rounded-md border border-border bg-background px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+      aria-label="Filter by review dimension"
+    >
+      {DIMENSION_FILTERS.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -324,15 +464,33 @@ function SortDropdown({
   );
 }
 
-function EmptyFilter({ filter }: { filter: FilterKey }) {
-  const messages: Record<FilterKey, string> = {
-    open: "Every finding decided. Ready to generate the review.",
-    agreed: "No findings agreed yet.",
-    dismissed: "No findings dismissed.",
-  };
+function EmptyFilter({
+  filter,
+  totalFindings,
+  openCount,
+}: {
+  filter: FilterKey;
+  totalFindings: number;
+  openCount: number;
+}) {
+  // Special case: no findings at all yet. This can happen while the paper is
+  // still being analyzed, or when Loupe genuinely found nothing. "Every
+  // finding decided" is wrong in either case.
+  let message: string;
+  if (totalFindings === 0) {
+    message = "Scanning for issues… findings will appear here as they're surfaced.";
+  } else if (filter === "open" && openCount === 0) {
+    message = "Every finding decided. Ready to generate the review.";
+  } else if (filter === "open") {
+    message = "No open findings in this view.";
+  } else if (filter === "agreed") {
+    message = "No findings agreed yet.";
+  } else {
+    message = "No findings dismissed.";
+  }
   return (
-    <div className="grid h-full place-items-center text-center text-xs text-muted-foreground">
-      {messages[filter]}
+    <div className="grid h-full place-items-center px-6 text-center text-xs text-muted-foreground">
+      {message}
     </div>
   );
 }

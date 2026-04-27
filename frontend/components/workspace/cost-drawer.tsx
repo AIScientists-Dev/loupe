@@ -10,12 +10,11 @@ import {
   CircleDollarSign,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePaperCost } from "@/lib/hooks/use-papers";
 import { useCostDrawer } from "@/lib/hooks/use-cost-drawer";
 import { useSettings } from "@/lib/hooks/use-settings";
-import type { CostReport, Paper } from "@/lib/types";
+import type { Paper } from "@/lib/types";
 
 // Display metadata for each known stage bucket the backend may emit.
 // Unknown keys fall back to a grey bar + title-cased label.
@@ -31,64 +30,64 @@ const stageLabel = (k: string) =>
   STAGE_META[k]?.label ?? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const stageColor = (k: string) => STAGE_META[k]?.color ?? "bg-muted-foreground/40";
 
-export function CostDrawer({ paper }: { paper: Paper }) {
+/**
+ * Compact trigger that shows the running budget summary and toggles the
+ * expandable detail drawer. Designed to live in a narrow header row —
+ * fits `$ $billed [bar] / $cap Details ^` in ~240px.
+ */
+export function CostSummaryTrigger({ paperId }: { paperId: string }) {
   const { open, setOpen } = useCostDrawer();
-  const { data: cost } = usePaperCost(paper.id, true);
+  const { data: cost } = usePaperCost(paperId, true);
   const budgetCap = useSettings((s) => s.defaultBudgetCapUsd);
 
   const billed = cost?.running_billed_usd ?? 0;
   const ratio = budgetCap > 0 ? billed / budgetCap : 0;
 
   return (
-    <div
-      className={cn(
-        "relative z-20 w-full shrink-0 overflow-hidden border-t border-border bg-background transition-all duration-200",
-        open ? "h-[280px]" : "h-10"
-      )}
+    <button
+      onClick={() => setOpen(!open)}
+      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-expanded={open}
+      aria-controls="cost-drawer-body"
+      title={
+        budgetCap > 0
+          ? `$${billed.toFixed(2)} of $${budgetCap.toFixed(2)} cap — click for details`
+          : `$${billed.toFixed(2)} — click for details`
+      }
     >
-      <button
-        onClick={() => setOpen(!open)}
-        className={cn(
-          "flex h-10 w-full items-center justify-between gap-3 px-5 text-xs transition-colors hover:bg-muted/40"
-        )}
-        aria-expanded={open}
-        aria-controls="cost-drawer-body"
-      >
-        <div className="flex items-center gap-2">
-          <CircleDollarSign className="size-3.5 text-muted-foreground" />
-          <span className="font-medium text-foreground">
-            ${billed.toFixed(2)}
-          </span>
-          {budgetCap > 0 && (
-            <span className="text-muted-foreground">
-              of ${budgetCap.toFixed(2)} cap
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          {budgetCap > 0 && (
-            <BudgetBar ratio={ratio} />
-          )}
-          <span className="inline-flex items-center gap-1 text-muted-foreground">
-            {open ? "Hide" : "Details"}
-            {open ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronUp className="size-3.5" />
-            )}
-          </span>
-        </div>
-      </button>
+      <CircleDollarSign className="size-3.5 shrink-0" />
+      <span className="font-medium text-foreground tabular-nums">
+        ${billed.toFixed(2)}
+      </span>
+      {budgetCap > 0 && <BudgetBar ratio={ratio} className="w-12" />}
+      {open ? (
+        <ChevronDown className="size-3 shrink-0" />
+      ) : (
+        <ChevronUp className="size-3 shrink-0" />
+      )}
+    </button>
+  );
+}
 
-      <AnimatePresence initial={false}>
-        {open && cost && (
-          <motion.div
-            id="cost-drawer-body"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="grid h-[240px] w-full grid-cols-[minmax(0,1fr)_260px] gap-6 overflow-hidden border-t border-border px-5 py-4"
+export function CostDrawer({ paper }: { paper: Paper }) {
+  const { open } = useCostDrawer();
+  const { data: cost } = usePaperCost(paper.id, true);
+
+  const billed = cost?.running_billed_usd ?? 0;
+
+  return (
+    <AnimatePresence initial={false}>
+      {open && cost && (
+        <motion.div
+          id="cost-drawer-body"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 260, opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="relative z-20 w-full shrink-0 overflow-hidden border-t border-border bg-background"
+        >
+          <div
+            className="grid h-[260px] w-full grid-cols-[minmax(0,1fr)_260px] gap-6 overflow-hidden px-5 py-4"
           >
             <div>
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -169,10 +168,10 @@ export function CostDrawer({ paper }: { paper: Paper }) {
                 </Link>
               </div>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -185,7 +184,13 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function BudgetBar({ ratio }: { ratio: number }) {
+export function BudgetBar({
+  ratio,
+  className,
+}: {
+  ratio: number;
+  className?: string;
+}) {
   const pct = Math.min(100, ratio * 100);
   const tone =
     ratio >= 1
@@ -195,7 +200,10 @@ function BudgetBar({ ratio }: { ratio: number }) {
         : "bg-primary";
   return (
     <div
-      className="h-1.5 w-24 overflow-hidden rounded-full bg-muted"
+      className={cn(
+        "h-1.5 overflow-hidden rounded-full bg-muted",
+        className
+      )}
       aria-label={`Budget used: ${Math.round(pct)}%`}
     >
       <div
