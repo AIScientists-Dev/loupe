@@ -17,7 +17,7 @@ An open-source AI reviewer for scientific papers.
 
 </div>
 
-> The hosted demo at **[loupe.morphmind.ai](https://loupe.morphmind.ai)** runs the latest release. Registration is gated by single-use invitation codes — request one at [morphmind.ai/loupe](https://morphmind.ai) — but everything you see there you can self-host with the steps below.
+> The hosted demo at **[loupe.morphmind.ai](https://loupe.morphmind.ai)** runs the latest release. To join the free-trial waitlist, sign up at **[agentlab.morphmind.ai](https://agentlab.morphmind.ai)** and we'll notify you once Loupe is launched. Everything you see there you can also self-host with the steps below.
 
 ---
 
