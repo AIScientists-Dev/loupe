@@ -29,6 +29,24 @@ It's the opinionated take of a journal reviewer's first pass, compressed from ho
 
 **Loupe is not** a proof solver, a plagiarism checker, or a replacement for human judgment. It's a magnifier — you decide what matters.
 
+---
+
+## Why not just paste the paper into ChatGPT?
+
+A 2026 INFORMS study of 6,957 submissions and 10,389 reviews at *Organization Science* — the first journal to report it — found AI-assisted reviews are "narrower" and "lower quality" than human ones, while submission volume rose 42% since the late-2022 release of ChatGPT.[^1] More research, less rigorous review.
+
+Loupe is built for the other direction. **An AI agent designed by researchers, for researchers** — not a chat window with a paper attached. A 50-page manuscript dropped into a generic chatbot returns one long blob: no citations to lines or pages, no record of what was actually checked, no way to push back on a single claim, and a token bill that grows with every follow-up. Loupe runs a ~$0.03 triage in about fifteen seconds first; the deep dive is opt-in and segment-by-segment, with severity-tagged findings each pinned to a bounding box on the PDF. You agree, dismiss, or investigate each one — quick actions like *re-derive*, *find a counterexample*, *check the citation* open a thread on that specific finding, not the whole paper. Every run logs token usage and dollar cost per segment, and the local-LLM path keeps the manuscript on your laptop end-to-end.
+
+<p align="center">
+  <img src="docs/screenshots/loupe-flow.gif" alt="Loupe walkthrough — upload, triage, investigate, draft review, dark mode" width="100%">
+</p>
+
+Loupe is opinionated about how AI should help with peer review: progressively, structured, cited, and cheap enough to run on every paper rather than only the ones you already suspect — which is the new experience of human-AI coworking.
+
+[^1]: Gartenberg, C., Hasan, S., Murray, A., & Pierce, L. (2026). *More Versus Better: Artificial Intelligence, Incentives, and the Emerging Crisis in Peer Review.* Organization Science, Articles in Advance. [doi:10.1287/orsc.2026.ed.v37.n3](https://doi.org/10.1287/orsc.2026.ed.v37.n3). We thank [Prof. De Liu](https://carlsonschool.umn.edu/faculty/de-liu) (Carlson School of Management, University of Minnesota) who pointed this reference to us.
+
+---
+
 ## Key features
 
 - **Two-stage review** — a one-minute triage produces an H/M/L verdict; a deep dive then scores the paper across six dimensions (proof, literature, clarity, numerical, relevance, novelty).
@@ -69,7 +87,7 @@ The settings panel labels each provider with its privacy posture so you can see 
 | **Ollama (local)** | any model in your `OLLAMA_MODELS` list | **Your paper never leaves your machine** | `OLLAMA_BASE_URL`, `OLLAMA_MODELS` |
 | **Custom OpenAI-compatible (local)** | any model your endpoint serves | Goes only to the endpoint you configured | `LOCAL_OPENAI_BASE_URL`, `LOCAL_OPENAI_API_KEY`, `LOCAL_OPENAI_MODELS` |
 
-Configure as many as you like — Loupe queries `GET /v1/providers` at runtime and the settings panel shows only the ones that are reachable. Visual localization currently requires a vision-capable cloud model (such as Claude or GPT-4.1); local-only mode keeps text analysis private and skips visual verification.
+Configure as many as you like — Loupe queries `GET /v1/providers` at runtime and the settings panel shows only the ones that are reachable. Visual localization works with any vision-capable cloud model (Claude family, GPT-4.1 / GPT-4o, or any OpenAI-compatible local endpoint serving a vision model — set via `VISION_MODEL`); local-only mode keeps text analysis private and skips visual verification when the configured vision model is unreachable.
 
 ---
 
