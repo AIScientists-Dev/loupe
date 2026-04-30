@@ -15,13 +15,16 @@
  */
 
 import { chromium } from "playwright";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const BASE = process.env.LOUPE_URL ?? "http://localhost:3009";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(HERE, "../../docs/screenshots/gif-frames");
+// The bundled test paper that backs the planted-bug fixture. MSW has no
+// /pdf handler, so we stub the response in Playwright with these bytes.
+const SAMPLE_PDF = resolve(HERE, "../../backend/tests/fixtures/sample_paper.pdf");
 
 const VIEW = { width: 1440, height: 900 };
 
@@ -110,6 +113,17 @@ async function main() {
         default_review_style: { style: "rigorous_skeptical" },
         completed_at: "2026-04-29T00:00:00Z",
       }),
+    });
+  });
+
+  // Stub the PDF endpoint with the bundled sample paper so the workspace
+  // renders the actual document instead of "Could not load PDF".
+  const pdfBytes = await readFile(SAMPLE_PDF);
+  await ctx.route("**/v1/papers/*/pdf", (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/pdf",
+      body: pdfBytes,
     });
   });
 
