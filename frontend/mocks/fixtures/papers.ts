@@ -10,6 +10,7 @@ const PLANTED_BUG_PAPER: Paper = {
   title: "Sharp Concentration for a Telescoped Estimator",
   filename: "sample_paper.pdf",
   status: "ready",
+  stage: "dived",
   created_at: "2026-04-17T09:04:00Z",
   findings: [
     {
@@ -113,6 +114,7 @@ const ANALYZING_PAPER: Paper = {
   title: "On the Convergence Rate of Gradient Descent under Anisotropic Noise",
   filename: "draft_anisotropic.pdf",
   status: "analyzing",
+  stage: "triaging",
   created_at: "2026-04-17T13:22:00Z",
   findings: [],
 };
@@ -122,6 +124,7 @@ const REVIEWED_PAPER: Paper = {
   title: "Debiased Lasso for High-Dimensional Generalized Linear Models",
   filename: "debiased_glm.pdf",
   status: "ready",
+  stage: "dived",
   created_at: "2026-04-16T18:40:00Z",
   findings: [
     {
@@ -158,6 +161,7 @@ export function toSummary(p: Paper): PaperSummary {
     title: p.title,
     filename: p.filename,
     status: p.status,
+    stage: p.stage,
     created_at: p.created_at,
     finding_count: p.findings.length,
     decided_count: p.findings.filter((f) => !!f.decision).length,
